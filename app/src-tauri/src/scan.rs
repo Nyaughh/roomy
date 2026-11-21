@@ -334,6 +334,9 @@ pub mod platform {
             .collect()
     }
 
+    /// A borrowed handle (not closed on drop).
+    struct HandleRef(HANDLE);
+
     struct Handle(HANDLE);
     impl Drop for Handle {
         fn drop(&mut self) {
@@ -367,6 +370,14 @@ pub mod platform {
             return Err(io::Error::last_os_error());
         }
         let h = Handle(h);
+        enumerate_handle(h.0)
+    }
+
+    /// List a directory through an already-open handle (opened with
+    /// FILE_LIST_DIRECTORY access). Used by the scanner and by the pinned,
+    /// handle-based deleter.
+    pub fn enumerate_handle(h: HANDLE) -> io::Result<Vec<DirEntryInfo>> {
+        let h = HandleRef(h);
         // u64 storage keeps the buffer 8-byte aligned as the API requires.
         let mut buf = vec![0u64; 64 * 1024 / 8];
         let buf_bytes = (buf.len() * 8) as u32;

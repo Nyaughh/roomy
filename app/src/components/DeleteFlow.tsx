@@ -44,7 +44,8 @@ export function DeleteProvider({
           toasts.ok(
             mode === "trash"
               ? `Moved ${bytes(r.bytes)} to the ${binName}. Empty it to free the space.`
-              : `Freed ${bytes(r.bytes)}.`,
+              : `Freed ${bytes(r.bytes)}.` +
+                  (r.shared > 0 ? ` ${bytes(r.shared)} more is still used by other hard links, so it stays on disk.` : ""),
           );
         }
         if (failed.length) {

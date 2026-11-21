@@ -46,6 +46,8 @@ export const CATEGORIES: Record<
   other: { label: "Other", viz: "stone", icon: LayoutGrid, noun: ["folder", "folders"], blurb: "Everything else, by folder" },
 };
 
+const osName = navigator.userAgent.includes("Mac") ? "macOS" : "Windows";
+
 const ORDER: StorageCategory[] = ["apps", "games", "projects", "media", "documents", "downloads", "system", "caches", "other"];
 
 const BUCKETS = ["app", "data", "cache", "build & deps"];
@@ -233,8 +235,13 @@ export function Storage({
         })}
       </section>
       <p className="faint" style={{ fontSize: 12.5, margin: "4px 4px 0" }}>
-        Every byte is counted once. Categories add up to {bytes(view.total)}
-        {view.isVolume && view.used != null ? `, the space ${navigator.userAgent.includes("Mac") ? "macOS" : "Windows"} reports as used` : ""}.
+        {view.isVolume && view.used != null && view.total !== view.used
+          ? `Every byte is counted once. Roomy counted ${bytes(Math.abs(view.total - view.used))} ${
+              view.total > view.used ? "more" : "less"
+            } than ${osName} reports as used (${bytes(view.used)}). That happens when files are compressed, deduplicated or shared between volumes, or change while Roomy looks.`
+          : `Every byte is counted once. Categories add up to ${bytes(view.total)}${
+              view.isVolume && view.used != null ? `, the space ${osName} reports as used` : ""
+            }.`}
       </p>
 
       {selected !== null && (

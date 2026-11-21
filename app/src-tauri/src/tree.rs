@@ -426,22 +426,38 @@ impl Tree {
             return;
         }
         let mut members: HashMap<u64, Vec<u32>> = HashMap::new();
-        let mut sizes: HashMap<u64, (u64, u64)> = HashMap::new();
+        // The file's current size: the newest live name that carries one
+        // (a fresh rescan is the latest observation), else the newest removed
+        // name (whose size is being handed over).
+        let mut live_size: HashMap<u64, (u32, u64, u64)> = HashMap::new();
+        let mut gone_size: HashMap<u64, (u32, u64, u64)> = HashMap::new();
         for (&node, &key) in &self.link_keys {
             if !keys.contains(&key) {
                 continue;
             }
             let n = &self.nodes[node as usize];
-            let e = sizes.entry(key).or_default();
-            e.0 = e.0.max(n.size);
-            e.1 = e.1.max(n.logical);
+            if n.size > 0 {
+                let slot = if n.is_deleted() {
+                    &mut gone_size
+                } else {
+                    &mut live_size
+                };
+                let e = slot.entry(key).or_insert((node, n.size, n.logical));
+                if node > e.0 {
+                    *e = (node, n.size, n.logical);
+                }
+            }
             if !n.is_deleted() {
                 members.entry(key).or_default().push(node);
             }
         }
         for (key, mut list) in members {
             list.sort_unstable();
-            let (size, logical) = sizes[&key];
+            let (_, size, logical) = live_size
+                .get(&key)
+                .or_else(|| gone_size.get(&key))
+                .copied()
+                .unwrap_or((0, 0, 0));
             let keep = list
                 .iter()
                 .copied()
@@ -605,6 +621,18 @@ mod tests {
         assert_eq!(t.nodes[y as usize].flags & FLAG_HARDLINK, 0);
         assert_eq!(t.nodes[b as usize].size, 105);
         assert_eq!(t.nodes[0].size, 105, "nothing was actually freed");
+    }
+
+    #[test]
+    fn refreshing_a_shrunk_linked_file_uses_its_new_size() {
+        let mut t = linked_tree();
+        let a = t.child_by_name(0, "a").unwrap();
+        // x was truncated to 40 bytes; a rescan of a sees the new size.
+        let mut fresh = RawDir::new("a".into(), 0);
+        fresh.files.push(linked("x", 40, 7));
+        fresh.finish();
+        t.replace_subtree_with_links(a, fresh, HashSet::new());
+        assert_eq!(t.nodes[0].size, 45, "40 for the file (once) + 5 for z");
     }
 
     #[test]

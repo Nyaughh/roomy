@@ -30,7 +30,7 @@ pub struct GapPart {
     pub explain: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub root_path: String,
@@ -563,9 +563,38 @@ struct ItemResult {
 struct DeleteReport {
     mode: Mode,
     results: Vec<ItemResult>,
-    /// Bytes freed (permanent) or moved to the Recycle Bin/Trash.
+    /// Bytes that left the scanned files: freed (permanent) or moved to the
+    /// Recycle Bin/Trash. Hard-link aware.
     bytes: u64,
+    /// Bytes of removed names whose data is still used by another hard link.
+    shared: u64,
     summary: Option<Summary>,
+}
+
+/// Bytes in the scan that belong to real files (the gap excluded).
+fn scanned_total(d: &ScanData) -> u64 {
+    let gap: u64 = d
+        .tree
+        .children(0)
+        .filter(|&c| d.tree.nodes[c as usize].kind == KIND_GAP)
+        .map(|c| d.tree.nodes[c as usize].size)
+        .sum();
+    d.tree.nodes[0].size.saturating_sub(gap)
+}
+
+/// Bring the tree in line with the disk for each changed item and return,
+/// per item, the bytes that really left the scanned files. Hard links are
+/// accounted for: removing one name of a file whose data is still reachable
+/// through another name frees nothing.
+fn settle(d: &mut ScanData, items: &[(u32, PathBuf)]) -> Vec<u64> {
+    items
+        .iter()
+        .map(|(id, p)| {
+            let before = scanned_total(d);
+            sync_path(d, *id, p);
+            before.saturating_sub(scanned_total(d))
+        })
+        .collect()
 }
 
 fn refresh_summary(d: &mut ScanData) {
@@ -594,7 +623,9 @@ fn refresh_summary(d: &mut ScanData) {
 /// After files under `path` changed on disk, bring the tree in line without
 /// a full rescan: drop the node if it's gone, otherwise rescan just it.
 fn sync_path(d: &mut ScanData, id: u32, path: &Path) {
-    if d.tree.get(id).is_none() {
+    // Never rescan the whole scan root (or a pseudo node) from here: that
+    // would drop the drive-level accounting.
+    if id == 0 || d.tree.get(id).is_none() || d.tree.is_pseudo(id) {
         return;
     }
     match std::fs::symlink_metadata(path) {
@@ -622,6 +653,11 @@ async fn delete_nodes(app: AppHandle, ids: Vec<u32>, mode: Mode) -> Result<Delet
                     let path = d.tree.path(id);
                     let blocked = if id == 0 {
                         Some("Roomy won't delete the folder you scanned.".to_string())
+                    } else if d.tree.nodes[id as usize].flags & FLAG_MOUNT != 0 {
+                        Some(
+                            "Another drive is mounted here. Roomy never removes a mounted drive."
+                                .to_string(),
+                        )
                     } else if d.tree.is_pseudo(id) {
                         Some("That's reserved system space, not a file.".to_string())
                     } else {
@@ -649,11 +685,20 @@ async fn delete_nodes(app: AppHandle, ids: Vec<u32>, mode: Mode) -> Result<Delet
         let d = g.as_mut().ok_or("No scan yet.")?;
         let mut out = Vec::new();
         let mut total = 0u64;
-        for (id, name, path, before, r) in results {
-            sync_path(d, id, &path);
-            let after = d.tree.get(id).map(|n| n.size).unwrap_or(0);
-            let bytes = before.saturating_sub(after);
+        let mut shared = 0u64;
+        let freed = settle(
+            d,
+            &results
+                .iter()
+                .map(|(id, _, p, _, _)| (*id, p.clone()))
+                .collect::<Vec<_>>(),
+        );
+        for ((id, name, _path, listed, r), bytes) in results.into_iter().zip(freed) {
             total += bytes;
+            // Removed names whose data lives on under another (hard-link) name.
+            if r.as_ref().map(|s| s.failed == 0).unwrap_or(false) {
+                shared += listed.saturating_sub(bytes);
+            }
             match r {
                 Ok(stats) => out.push(ItemResult {
                     id,
@@ -682,6 +727,7 @@ async fn delete_nodes(app: AppHandle, ids: Vec<u32>, mode: Mode) -> Result<Delet
             mode,
             results: out,
             bytes: total,
+            shared,
             summary: Some(d.summary.clone()),
         })
     })
@@ -695,8 +741,9 @@ async fn get_suggestions(app: AppHandle) -> Result<Vec<suggest::Suggestion>, Str
         let state = app.state::<AppState>();
         let elevated = system::is_elevated();
         let mut list = state.pool.install(|| suggest::compute(elevated));
-        if let Some(d) = state.data.read().as_ref() {
-            if let Some(p) = suggest::project_junk(&d.tree) {
+        if let Some(d) = state.data.write().as_mut() {
+            let s = storage_for(d);
+            if let Some(p) = suggest::project_junk_from(&s.entities, &d.tree) {
                 list.push(p);
             }
         }
@@ -717,7 +764,11 @@ struct CleanSelection {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CleanReport {
+    /// Bytes that really left the scanned drive/folder (hard-link aware),
+    /// plus what emptying the Recycle Bin freed.
     freed: u64,
+    /// Removed from folders outside the scan: measured, not hard-link checked.
+    outside: u64,
     cleaned: u32,
     failed: u64,
     errors: Vec<String>,
@@ -732,7 +783,8 @@ async fn clean_suggestions(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let known = state.suggestions.lock().clone();
-        let mut freed = 0u64;
+        let mut outside = 0u64;
+        let mut bin_freed = 0u64;
         let mut cleaned = 0u32;
         let mut failed = 0u64;
         let mut errors: Vec<String> = Vec::new();
@@ -742,23 +794,34 @@ async fn clean_suggestions(
             let Some(s) = known.iter().find(|s| s.id == sel.suggestion_id) else {
                 continue;
             };
-            let Some(item) = s.items.iter().find(|i| i.path == sel.path) else {
-                continue;
-            };
-            if s.action == suggest::Action::Guide {
+            if !s.items.iter().any(|i| i.path == sel.path) || s.action == suggest::Action::Guide {
                 continue;
             }
             if s.action == suggest::Action::RecycleBin {
+                let before = system::recycle_bin_size().map(|(b, _)| b).unwrap_or(0);
                 match system::empty_recycle_bin() {
                     Ok(()) => {
-                        freed += item.size;
+                        let after = system::recycle_bin_size().map(|(b, _)| b).unwrap_or(0);
+                        bin_freed += before.saturating_sub(after);
                         cleaned += 1;
                     }
                     Err(e) => errors.push(e),
                 }
                 continue;
             }
-            let path = PathBuf::from(&item.path);
+            let path = PathBuf::from(&sel.path);
+            // Paths outside the scan can only be measured, not hard-link checked.
+            let in_scan = state
+                .data
+                .read()
+                .as_ref()
+                .map(|d| views::find_by_path(&d.tree, &path).is_some())
+                .unwrap_or(false);
+            let measured_before = if in_scan {
+                0
+            } else {
+                scan::measure(&path, Arc::new(AtomicBool::new(false))).0
+            };
             let min_age = s.min_age_hours.map(|h| Duration::from_secs(h * 3600));
             let res = match s.action {
                 suggest::Action::Contents => delete::delete_contents(&state.guard, &path, min_age),
@@ -766,8 +829,10 @@ async fn clean_suggestions(
             };
             match res {
                 Ok(stats) => {
-                    let (after, _) = scan::measure(&path, Arc::new(AtomicBool::new(false)));
-                    freed += item.size.saturating_sub(after);
+                    if !in_scan {
+                        let (after, _) = scan::measure(&path, Arc::new(AtomicBool::new(false)));
+                        outside += measured_before.saturating_sub(after);
+                    }
                     cleaned += 1;
                     failed += stats.failed;
                     if let Some(e) = stats.first_error {
@@ -778,25 +843,29 @@ async fn clean_suggestions(
                 }
                 Err(e) => errors.push(e),
             }
-            touched.push(path);
+            if in_scan {
+                touched.push(path);
+            }
         }
-        // Update the scanned tree for everything we touched.
-        let summary = {
+        // Update the scanned tree for everything we touched and measure what
+        // really left it.
+        let (freed, summary) = {
             let mut g = state.data.write();
             if let Some(d) = g.as_mut() {
-                for p in &touched {
-                    if let Some(id) = views::find_by_path(&d.tree, p) {
-                        sync_path(d, id, p);
-                    }
-                }
+                let items: Vec<(u32, PathBuf)> = touched
+                    .iter()
+                    .filter_map(|p| views::find_by_path(&d.tree, p).map(|id| (id, p.clone())))
+                    .collect();
+                let freed: u64 = settle(d, &items).iter().sum();
                 refresh_summary(d);
-                Some(d.summary.clone())
+                (freed, Some(d.summary.clone()))
             } else {
-                None
+                (0, None)
             }
         };
         Ok(CleanReport {
-            freed,
+            freed: freed + bin_freed,
+            outside,
             cleaned,
             failed,
             errors,
@@ -1072,6 +1141,7 @@ async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<Action
                 e.locations
                     .iter()
                     .map(|l| l.node)
+                    .filter(|n| *n != 0)
                     .filter(live)
                     .map(|n| (n, d.tree.path(n)))
                     .collect(),
@@ -1091,14 +1161,11 @@ async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<Action
             "refresh" => {
                 let mut g = state.data.write();
                 let d = g.as_mut().ok_or("No scan yet.")?;
-                let before = d.tree.nodes[0].size;
-                for (n, p) in &locations {
-                    sync_path(d, *n, p);
-                }
+                let freed: u64 = settle(d, &locations).iter().sum();
                 refresh_summary(d);
                 Ok(ActionReport {
                     message: "Updated.".into(),
-                    freed: before.saturating_sub(d.tree.nodes[0].size),
+                    freed,
                     failed: 0,
                     summary: Some(d.summary.clone()),
                 })
@@ -1127,12 +1194,8 @@ async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<Action
                 }
                 let mut g = state.data.write();
                 let d = g.as_mut().ok_or("No scan yet.")?;
-                let before = d.tree.nodes[0].size;
-                for (n, p) in &targets {
-                    sync_path(d, *n, p);
-                }
+                let freed: u64 = settle(d, &targets).iter().sum();
                 refresh_summary(d);
-                let freed = before.saturating_sub(d.tree.nodes[0].size);
                 Ok(ActionReport {
                     message: match errors.first() {
                         Some(e) if failed > 0 => format!("Freed {}. {e}", fmt_bytes(freed)),
@@ -1209,7 +1272,68 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::split_gap;
+    use super::*;
+
+    fn scan_data(root: &Path) -> ScanData {
+        let ctx = scan::ScanCtx::new(
+            root,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(scan::Progress::default()),
+        );
+        let raw = scan::scan_dir(&ctx, root);
+        let dups = std::mem::take(&mut *ctx.dup_keys.lock());
+        ScanData {
+            tree: Tree::from_raw_with_links(raw, root.to_string_lossy().into_owned(), dups),
+            summary: Summary::default(),
+            catalog: Arc::new(catalog::Catalog::default()),
+            storage: None,
+            mft: None,
+        }
+    }
+
+    #[test]
+    fn deleting_one_name_of_a_hard_linked_file_reports_nothing_freed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        std::fs::write(root.join("a/data.bin"), vec![1u8; 80_000]).unwrap();
+        std::fs::hard_link(root.join("a/data.bin"), root.join("b/same.bin")).unwrap();
+        std::fs::write(root.join("a/solo.bin"), vec![2u8; 40_000]).unwrap();
+        let mut d = scan_data(&root);
+        if d.tree.dup_keys.is_empty() {
+            return; // filesystem without hard-link identity
+        }
+        let guard = safety::Guard::default();
+        let a = d.tree.child_by_name(0, "a").unwrap();
+        let linked = d.tree.child_by_name(a, "data.bin").unwrap();
+        let solo = d.tree.child_by_name(a, "solo.bin").unwrap();
+        let solo_size = d.tree.nodes[solo as usize].size;
+        for (id, name) in [(linked, "data.bin"), (solo, "solo.bin")] {
+            delete::delete_path(&guard, &root.join("a").join(name), Mode::Permanent).unwrap();
+            let _ = id;
+        }
+        let freed = settle(
+            &mut d,
+            &[
+                (linked, root.join("a/data.bin")),
+                (solo, root.join("a/solo.bin")),
+            ],
+        );
+        assert_eq!(freed[0], 0, "the data is still on disk as b/same.bin");
+        assert_eq!(freed[1], solo_size, "a file with one name is really freed");
+    }
+
+    #[test]
+    fn the_scan_root_is_never_resynced_as_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::write(root.join("x.bin"), vec![1u8; 1000]).unwrap();
+        let mut d = scan_data(&root);
+        let before = d.tree.nodes.len();
+        sync_path(&mut d, 0, &root);
+        assert_eq!(d.tree.nodes.len(), before, "no rescan of the root");
+    }
 
     #[test]
     fn gap_parts_always_add_up() {

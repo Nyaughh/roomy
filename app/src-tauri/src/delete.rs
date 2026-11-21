@@ -1,12 +1,18 @@
 //! Deleting files and folders: Recycle Bin/Trash by default, permanent only
-//! when asked. Recursive deletes never follow junctions or symlinks: a link
-//! is removed as a link and whatever it points at is left untouched.
+//! when asked.
+//!
+//! Permanent removal works on pinned handles, never on re-resolved path
+//! strings: every directory is opened without following links and kept
+//! open (Windows: without delete sharing, so it can't be renamed or swapped;
+//! Unix: as a directory fd that children are removed relative to). A link is
+//! only ever removed as a link, and removal never crosses into another
+//! mounted volume.
 
 use crate::safety::{is_protected_name, linked_ancestor, Guard};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +36,13 @@ impl Stats {
         self.failed += 1;
         if self.first_error.is_none() {
             self.first_error = Some(describe(path, e));
+        }
+    }
+
+    fn fail_msg(&mut self, msg: impl Into<String>) {
+        self.failed += 1;
+        if self.first_error.is_none() {
+            self.first_error = Some(msg.into());
         }
     }
 }
@@ -59,100 +72,38 @@ fn is_link(md: &fs::Metadata) -> bool {
     md.file_type().is_symlink()
 }
 
-#[cfg(windows)]
-fn link_is_dir(md: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    md.file_attributes() & 0x10 != 0 // FILE_ATTRIBUTE_DIRECTORY
-}
-
-#[cfg(not(windows))]
-fn link_is_dir(_md: &fs::Metadata) -> bool {
-    false
-}
-
-/// Remove a link itself, never its target.
-fn remove_link(path: &Path, md: &fs::Metadata) -> io::Result<()> {
-    if link_is_dir(md) {
-        fs::remove_dir(path)
-    } else {
-        fs::remove_file(path)
-    }
-}
-
-fn remove_file_forced(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            // Read-only files can't be deleted on Windows until the flag is cleared.
-            let md = fs::symlink_metadata(path)?;
-            let mut perms = md.permissions();
-            if perms.readonly() {
-                #[allow(clippy::permissions_set_readonly_false)]
-                perms.set_readonly(false);
-                fs::set_permissions(path, perms)?;
-                fs::remove_file(path)
-            } else {
-                Err(e)
-            }
-        }
-        r => r,
-    }
-}
-
-fn older_than(md: &fs::Metadata, min_age: Option<Duration>) -> bool {
+fn older_than_secs(mtime_secs: i64, min_age: Option<Duration>) -> bool {
     match min_age {
         None => true,
-        Some(age) => md
-            .modified()
-            .ok()
-            .and_then(|m| SystemTime::now().duration_since(m).ok())
-            .map(|d| d >= age)
-            .unwrap_or(false),
+        Some(age) => {
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            now - mtime_secs >= age.as_secs() as i64
+        }
     }
 }
 
-/// Permanently remove `path`, recursing into real directories only. Items
-/// that can't be removed (in use, no permission) are skipped and counted.
-pub fn remove_tree(path: &Path, min_age: Option<Duration>, stats: &mut Stats) {
-    let dev = device_of(path);
-    remove_tree_on(path, min_age, stats, dev);
+/// Where `path`'s parent really is, plus its name: what removal must find
+/// when it opens the target (checked again on the opened handle).
+fn expected_location(path: &Path) -> Option<PathBuf> {
+    let (parent, name) = (path.parent()?, path.file_name()?);
+    Some(fs::canonicalize(parent).ok()?.join(name))
 }
 
-#[cfg(unix)]
-fn device_of(path: &Path) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    fs::symlink_metadata(path).ok().map(|m| m.dev())
-}
-
-#[cfg(not(unix))]
-fn device_of(_path: &Path) -> Option<u64> {
-    None
-}
-
-/// True if `md` (a directory) lives on a different volume than `dev`.
-#[cfg(unix)]
-fn other_volume(md: &fs::Metadata, dev: Option<u64>) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    dev.map(|d| md.dev() != d).unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn other_volume(_md: &fs::Metadata, _dev: Option<u64>) -> bool {
-    false
-}
-
-/// A Windows volume mount point (a drive mounted into a folder).
-fn is_volume_mount(path: &Path) -> bool {
-    cfg!(windows)
-        && fs::read_link(path)
-            .map(|t| t.to_string_lossy().contains("Volume{"))
-            .unwrap_or(false)
+/// True if another volume is mounted at `path` (or `path` is a volume root).
+pub fn is_mount_point(path: &Path) -> bool {
+    sys::is_mount_point(path)
 }
 
 /// Walk a folder (never following links) and refuse if it holds something
 /// that must never be deleted: a registry hive or system file, or another
 /// drive mounted inside it. Run before either kind of delete.
 pub fn inspect(dir: &Path) -> Result<(), String> {
-    let dev = device_of(dir);
+    if is_mount_point(dir) {
+        return Err(format!("Another drive is mounted at {}.", dir.display()));
+    }
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
         let rd = match fs::read_dir(&d) {
@@ -173,22 +124,13 @@ pub fn inspect(dir: &Path) -> Result<(), String> {
             let Ok(md) = fs::symlink_metadata(&p) else {
                 continue;
             };
-            if is_link(&md) {
-                if is_volume_mount(&p) {
-                    return Err(format!(
-                        "Another drive is mounted inside it at {}.",
-                        p.display()
-                    ));
-                }
-                continue; // a link is removed as a link, never followed
+            if (is_link(&md) || md.is_dir()) && is_mount_point(&p) {
+                return Err(format!(
+                    "Another drive is mounted inside it at {}.",
+                    p.display()
+                ));
             }
-            if md.is_dir() {
-                if other_volume(&md, dev) {
-                    return Err(format!(
-                        "Another drive is mounted inside it at {}.",
-                        p.display()
-                    ));
-                }
+            if md.is_dir() && !is_link(&md) {
                 stack.push(p);
             }
         }
@@ -196,82 +138,20 @@ pub fn inspect(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn remove_tree_on(path: &Path, min_age: Option<Duration>, stats: &mut Stats, dev: Option<u64>) {
-    let md = match fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
-        Err(e) => return stats.fail(path, &e),
-    };
-    if is_link(&md) && is_volume_mount(path) {
-        stats.failed += 1;
-        stats.first_error.get_or_insert_with(|| {
-            format!(
-                "Skipped {}: another drive is mounted there.",
+/// Permanently remove `path`: a file, a link (removed as a link) or a real
+/// directory and everything in it. Items that can't be removed (in use, no
+/// permission, on another volume, protected) are skipped and counted.
+pub fn remove_tree(path: &Path, min_age: Option<Duration>, stats: &mut Stats) {
+    let Some(expected) = expected_location(path) else {
+        if fs::symlink_metadata(path).is_ok() {
+            stats.fail_msg(format!(
+                "Couldn't confirm where {} is, so it was left alone.",
                 path.display()
-            )
-        });
-        return;
-    }
-    if is_link(&md) {
-        match remove_link(path, &md) {
-            Ok(()) => stats.removed += 1,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => stats.fail(path, &e),
+            ));
         }
         return;
-    }
-    if md.is_dir() {
-        if other_volume(&md, dev) {
-            stats.failed += 1;
-            stats.first_error.get_or_insert_with(|| {
-                format!("Skipped {}: it's on another drive.", path.display())
-            });
-            return;
-        }
-        match fs::read_dir(path) {
-            Ok(rd) => {
-                for entry in rd.flatten() {
-                    remove_tree_on(&entry.path(), min_age, stats, dev);
-                }
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
-            Err(e) => return stats.fail(path, &e),
-        }
-        match fs::remove_dir(path) {
-            Ok(()) => stats.removed += 1,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => {
-                // Not empty because something inside was skipped: that was
-                // already counted, so don't count the folder again.
-                let not_empty = fs::read_dir(path)
-                    .map(|mut r| r.next().is_some())
-                    .unwrap_or(false);
-                if !not_empty {
-                    stats.fail(path, &e);
-                }
-            }
-        }
-        return;
-    }
-    if !older_than(&md, min_age) {
-        return;
-    }
-    if path
-        .file_name()
-        .map(|n| is_protected_name(&n.to_string_lossy()))
-        .unwrap_or(false)
-    {
-        stats.failed += 1;
-        stats
-            .first_error
-            .get_or_insert_with(|| format!("Kept {}: it's a system file.", path.display()));
-        return;
-    }
-    match remove_file_forced(path) {
-        Ok(()) => stats.removed += 1,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => stats.fail(path, &e),
-    }
+    };
+    sys::remove_path(path, &expected, min_age, stats);
 }
 
 /// Delete one item after checking it against the guard.
@@ -282,7 +162,16 @@ pub fn delete_path(guard: &Guard, path: &Path, mode: Mode) -> Result<Stats, Stri
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Stats::default()),
         Err(e) => return Err(describe(path, &e)),
     };
-    if md.is_dir() && !is_link(&md) {
+    if (is_link(&md) || md.is_dir()) && is_mount_point(path) {
+        return Err("Another drive is mounted here. Roomy never removes a mounted drive.".into());
+    }
+    if is_link(&md) {
+        if mode == Mode::Trash {
+            // Links can't go to the Recycle Bin/Trash reliably, and removing one
+            // outright isn't recoverable: make that an explicit choice.
+            return Err("This is a shortcut link (junction or symlink). Choose “Delete permanently” to remove just the link; what it points to is never touched.".into());
+        }
+    } else if md.is_dir() {
         // Both modes remove the whole folder, so check everything inside first.
         inspect(path)?;
     }
@@ -293,15 +182,6 @@ pub fn delete_path(guard: &Guard, path: &Path, mode: Mode) -> Result<Stats, Stri
             Ok(stats)
         }
         Mode::Trash => {
-            if is_link(&md) {
-                // Recycling a link can confuse the shell; a link holds no data,
-                // so removing it outright loses nothing.
-                remove_link(path, &md).map_err(|e| describe(path, &e))?;
-                return Ok(Stats {
-                    removed: 1,
-                    ..Default::default()
-                });
-            }
             trash::delete(path).map_err(|e| {
                 format!(
                     "Couldn't move “{}” to the {}: {e}",
@@ -348,34 +228,548 @@ pub fn delete_contents(
             link.display()
         ));
     }
+    if is_mount_point(dir) {
+        return Err(format!(
+            "Another drive is mounted at {}, so Roomy left it alone.",
+            dir.display()
+        ));
+    }
+    let mut stats = Stats::default();
     if !md.is_dir() {
-        let mut stats = Stats::default();
         guard.check(dir)?;
         remove_tree(dir, min_age, &mut stats);
         return Ok(stats);
     }
-    let mut stats = Stats::default();
-    let rd = fs::read_dir(dir).map_err(|e| describe(dir, &e))?;
-    for entry in rd.flatten() {
-        let p = entry.path();
-        let checked = guard.check(&p).and_then(|_| {
-            let is_real_dir = fs::symlink_metadata(&p)
-                .map(|m| m.is_dir() && !is_link(&m))
-                .unwrap_or(false);
-            if is_real_dir {
-                inspect(&p)
-            } else {
-                Ok(())
-            }
-        });
-        if let Err(reason) = checked {
-            stats.failed += 1;
-            stats.first_error.get_or_insert(reason);
-            continue;
+    let mut check = |child: &Path| -> Result<(), String> {
+        guard.check(child)?;
+        let is_real_dir = fs::symlink_metadata(child)
+            .map(|m| m.is_dir() && !is_link(&m))
+            .unwrap_or(false);
+        if is_real_dir {
+            inspect(child)?;
         }
-        remove_tree(&p, min_age, &mut stats);
-    }
+        Ok(())
+    };
+    sys::remove_children(dir, min_age, &mut stats, &mut check).map_err(|e| describe(dir, &e))?;
     Ok(stats)
+}
+
+type Check<'a> = dyn FnMut(&Path) -> Result<(), String> + 'a;
+
+#[cfg(windows)]
+mod sys {
+    use super::*;
+    use crate::scan::platform::{enumerate_handle, filetime_to_unix, to_wide_long, volume_root};
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::*;
+    use windows_sys::Win32::Storage::FileSystem::*;
+
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+    const ERROR_DIR_NOT_EMPTY: i32 = 145;
+
+    struct H(HANDLE);
+    impl Drop for H {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// Open without following a final link, without delete sharing (so the
+    /// object can't be renamed or replaced while held), with delete access.
+    fn open(path: &Path) -> io::Result<H> {
+        let w = to_wide_long(path);
+        let try_open = |access: u32| unsafe {
+            CreateFileW(
+                w.as_ptr(),
+                access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                std::ptr::null_mut(),
+            )
+        };
+        let base = DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES;
+        let mut h = try_open(base | FILE_LIST_DIRECTORY);
+        if h == INVALID_HANDLE_VALUE {
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::PermissionDenied {
+                return Err(e);
+            }
+            h = try_open(base);
+            if h == INVALID_HANDLE_VALUE {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(H(h))
+    }
+
+    fn attr_tag(h: &H) -> io::Result<(u32, u32)> {
+        let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                h.0,
+                FileAttributeTagInfo,
+                &mut info as *mut _ as *mut c_void,
+                std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((info.FileAttributes, info.ReparseTag))
+    }
+
+    fn basic(h: &H) -> io::Result<FILE_BASIC_INFO> {
+        let mut info: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                h.0,
+                FileBasicInfo,
+                &mut info as *mut _ as *mut c_void,
+                std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(info)
+    }
+
+    /// Delete the object behind the handle (POSIX semantics where available).
+    fn delete(h: &H) -> io::Result<()> {
+        let ex = FILE_DISPOSITION_INFO_EX {
+            Flags: FILE_DISPOSITION_FLAG_DELETE
+                | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+                | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+        };
+        let ok = unsafe {
+            SetFileInformationByHandle(
+                h.0,
+                FileDispositionInfoEx,
+                &ex as *const _ as *const c_void,
+                std::mem::size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+            )
+        };
+        if ok != 0 {
+            return Ok(());
+        }
+        let e = io::Error::last_os_error();
+        // Older Windows/filesystems: clear read-only, then classic delete.
+        if !matches!(e.raw_os_error(), Some(1) | Some(50) | Some(87)) {
+            return Err(e);
+        }
+        if let Ok(mut b) = basic(h) {
+            if b.FileAttributes & FILE_ATTRIBUTE_READONLY != 0 {
+                b.FileAttributes &= !FILE_ATTRIBUTE_READONLY;
+                b.CreationTime = 0;
+                b.LastAccessTime = 0;
+                b.LastWriteTime = 0;
+                b.ChangeTime = 0;
+                unsafe {
+                    SetFileInformationByHandle(
+                        h.0,
+                        FileBasicInfo,
+                        &b as *const _ as *const c_void,
+                        std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+                    );
+                }
+            }
+        }
+        let d = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+        let ok = unsafe {
+            SetFileInformationByHandle(
+                h.0,
+                FileDispositionInfo,
+                &d as *const _ as *const c_void,
+                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        };
+        if ok != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    fn final_path(h: &H) -> Option<String> {
+        let mut buf = vec![0u16; 1024];
+        let n = unsafe { GetFinalPathNameByHandleW(h.0, buf.as_mut_ptr(), buf.len() as u32, 0) };
+        if n == 0 || n as usize >= buf.len() {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..n as usize]))
+    }
+
+    fn norm(s: &str) -> String {
+        let s = s
+            .strip_prefix(r"\\?\UNC\")
+            .map(|r| format!(r"\\{r}"))
+            .unwrap_or_else(|| s.strip_prefix(r"\\?\").unwrap_or(s).to_string());
+        s.trim_end_matches('\\').to_lowercase()
+    }
+
+    pub fn is_mount_point(path: &Path) -> bool {
+        // A drive mounted into a folder, or the root of a volume.
+        let via_link = fs::read_link(path)
+            .map(|t| t.to_string_lossy().contains("Volume{"))
+            .unwrap_or(false);
+        let is_volume_root = volume_root(path)
+            .map(|r| norm(&r) == norm(&path.to_string_lossy()))
+            .unwrap_or(false);
+        via_link || is_volume_root
+    }
+
+    fn rm(path: &Path, h: H, min_age: Option<Duration>, stats: &mut Stats) {
+        let (attrs, tag) = match attr_tag(&h) {
+            Ok(v) => v,
+            Err(e) => return stats.fail(path, &e),
+        };
+        if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && tag & 0x2000_0000 != 0 {
+            // A link: remove the link itself, never what it points to.
+            if tag == IO_REPARSE_TAG_MOUNT_POINT && is_mount_point(path) {
+                return stats.fail_msg(format!(
+                    "Skipped {}: another drive is mounted there.",
+                    path.display()
+                ));
+            }
+            match delete(&h) {
+                Ok(()) => stats.removed += 1,
+                Err(e) => stats.fail(path, &e),
+            }
+            return;
+        }
+        if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+            // `h` stays open (no delete sharing) while children are removed, so
+            // this folder can't be swapped for something else meanwhile.
+            match enumerate_handle(h.0) {
+                Ok(entries) => {
+                    for e in entries {
+                        let child = path.join(&e.name);
+                        match open(&child) {
+                            Ok(ch) => rm(&child, ch, min_age, stats),
+                            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                            Err(err) => stats.fail(&child, &err),
+                        }
+                    }
+                }
+                Err(e) => return stats.fail(path, &e),
+            }
+            match delete(&h) {
+                Ok(()) => stats.removed += 1,
+                Err(e) if e.raw_os_error() == Some(ERROR_DIR_NOT_EMPTY) => {} // something inside was kept
+                Err(e) => stats.fail(path, &e),
+            }
+            return;
+        }
+        if path
+            .file_name()
+            .map(|n| is_protected_name(&n.to_string_lossy()))
+            .unwrap_or(false)
+        {
+            return stats.fail_msg(format!("Kept {}: it's a system file.", path.display()));
+        }
+        if min_age.is_some() {
+            let young = basic(&h)
+                .map(|b| !older_than_secs(filetime_to_unix(b.LastWriteTime), min_age))
+                .unwrap_or(true);
+            if young {
+                return;
+            }
+        }
+        match delete(&h) {
+            Ok(()) => stats.removed += 1,
+            Err(e) => stats.fail(path, &e),
+        }
+    }
+
+    pub fn remove_path(path: &Path, expected: &Path, min_age: Option<Duration>, stats: &mut Stats) {
+        let h = match open(path) {
+            Ok(h) => h,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+            Err(e) => return stats.fail(path, &e),
+        };
+        // The object we pinned must be the one that was checked.
+        if final_path(&h)
+            .map(|f| norm(&f) != norm(&expected.to_string_lossy()))
+            .unwrap_or(true)
+        {
+            return stats.fail_msg(format!(
+                "{} changed while Roomy was working, so it was left alone.",
+                path.display()
+            ));
+        }
+        rm(path, h, min_age, stats);
+    }
+
+    pub fn remove_children(
+        dir: &Path,
+        min_age: Option<Duration>,
+        stats: &mut Stats,
+        check: &mut Check<'_>,
+    ) -> io::Result<()> {
+        let h = open(dir)?;
+        let (attrs, _) = attr_tag(&h)?;
+        if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 || attrs & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            return Err(io::Error::other("not a real folder"));
+        }
+        // `h` pins the folder for the whole operation.
+        for e in enumerate_handle(h.0)? {
+            let child = dir.join(&e.name);
+            if let Err(reason) = check(&child) {
+                stats.fail_msg(reason);
+                continue;
+            }
+            match open(&child) {
+                Ok(ch) => rm(&child, ch, min_age, stats),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => stats.fail(&child, &err),
+            }
+        }
+        drop(h);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+mod sys {
+    use super::*;
+    use std::ffi::{CStr, CString, OsStr, OsString};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::os::unix::fs::MetadataExt;
+
+    fn cstr(s: &OsStr) -> io::Result<CString> {
+        CString::new(s.as_bytes()).map_err(|_| io::Error::other("bad name"))
+    }
+
+    fn last() -> io::Error {
+        io::Error::last_os_error()
+    }
+
+    fn lstat_at(dir: RawFd, name: &CStr) -> io::Result<libc::stat> {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(dir, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return Err(last());
+        }
+        Ok(st)
+    }
+
+    fn fstat(fd: RawFd) -> io::Result<libc::stat> {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd, &mut st) } != 0 {
+            return Err(last());
+        }
+        Ok(st)
+    }
+
+    fn open_dir_at(dir: RawFd, name: &CStr) -> io::Result<OwnedFd> {
+        let fd = unsafe {
+            libc::openat(
+                dir,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(last());
+        }
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    fn open_dir(path: &Path, follow: bool) -> io::Result<OwnedFd> {
+        let c = cstr(path.as_os_str())?;
+        let mut flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+        if !follow {
+            flags |= libc::O_NOFOLLOW;
+        }
+        let fd = unsafe { libc::open(c.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(last());
+        }
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    fn list(fd: RawFd) -> io::Result<Vec<OsString>> {
+        let dup = unsafe { libc::dup(fd) };
+        if dup < 0 {
+            return Err(last());
+        }
+        let dirp = unsafe { libc::fdopendir(dup) };
+        if dirp.is_null() {
+            unsafe { libc::close(dup) };
+            return Err(last());
+        }
+        let mut out = Vec::new();
+        loop {
+            let ent = unsafe { libc::readdir(dirp) };
+            if ent.is_null() {
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*ent).d_name.as_ptr()) }
+                .to_bytes()
+                .to_vec();
+            if name != b"." && name != b".." {
+                out.push(OsString::from_vec(name));
+            }
+        }
+        unsafe { libc::closedir(dirp) };
+        Ok(out)
+    }
+
+    fn unlink_at(dir: RawFd, name: &CStr, flags: libc::c_int) -> io::Result<()> {
+        if unsafe { libc::unlinkat(dir, name.as_ptr(), flags) } != 0 {
+            return Err(last());
+        }
+        Ok(())
+    }
+
+    fn is_dir(st: &libc::stat) -> bool {
+        st.st_mode & libc::S_IFMT == libc::S_IFDIR
+    }
+
+    // dev_t/ino_t/time_t widths differ by platform.
+    #[allow(clippy::unnecessary_cast)]
+    fn ids(st: &libc::stat) -> (u64, u64) {
+        (st.st_dev as u64, st.st_ino as u64)
+    }
+
+    #[allow(clippy::unnecessary_cast)]
+    fn mtime(st: &libc::stat) -> i64 {
+        st.st_mtime as i64
+    }
+
+    pub fn is_mount_point(path: &Path) -> bool {
+        let (Ok(md), Some(parent)) = (fs::symlink_metadata(path), path.parent()) else {
+            return false;
+        };
+        if md.file_type().is_symlink() {
+            return false;
+        }
+        fs::metadata(parent)
+            .map(|p| p.dev() != md.dev())
+            .unwrap_or(false)
+    }
+
+    /// Remove `name` inside the pinned directory `dir`, never leaving `dev`.
+    fn rm_at(
+        dir: RawFd,
+        name: &CStr,
+        display: &Path,
+        dev: u64,
+        min_age: Option<Duration>,
+        stats: &mut Stats,
+    ) {
+        let st = match lstat_at(dir, name) {
+            Ok(s) => s,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+            Err(e) => return stats.fail(display, &e),
+        };
+        if is_dir(&st) {
+            if ids(&st).0 != dev {
+                return stats.fail_msg(format!(
+                    "Skipped {}: it's on another drive.",
+                    display.display()
+                ));
+            }
+            let fd = match open_dir_at(dir, name) {
+                Ok(fd) => fd,
+                Err(e) => return stats.fail(display, &e),
+            };
+            // Make sure what we opened is what we looked at (not swapped).
+            match fstat(fd.as_raw_fd()) {
+                Ok(now) if ids(&now) == ids(&st) => {}
+                _ => {
+                    return stats.fail_msg(format!(
+                        "{} changed while Roomy was working, so it was left alone.",
+                        display.display()
+                    ))
+                }
+            }
+            match list(fd.as_raw_fd()) {
+                Ok(children) => {
+                    for c in children {
+                        let Ok(cn) = cstr(&c) else { continue };
+                        rm_at(fd.as_raw_fd(), &cn, &display.join(&c), dev, min_age, stats);
+                    }
+                }
+                Err(e) => return stats.fail(display, &e),
+            }
+            drop(fd);
+            match unlink_at(dir, name, libc::AT_REMOVEDIR) {
+                Ok(()) => stats.removed += 1,
+                Err(e)
+                    if matches!(e.raw_os_error(), Some(libc::ENOTEMPTY) | Some(libc::EEXIST)) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => stats.fail(display, &e),
+            }
+            return;
+        }
+        let is_symlink = st.st_mode & libc::S_IFMT == libc::S_IFLNK;
+        if !is_symlink {
+            if is_protected_name(&String::from_utf8_lossy(name.to_bytes())) {
+                return stats.fail_msg(format!("Kept {}: it's a system file.", display.display()));
+            }
+            if !older_than_secs(mtime(&st), min_age) {
+                return;
+            }
+        }
+        // Files and links (a link is removed as a link).
+        match unlink_at(dir, name, 0) {
+            Ok(()) => stats.removed += 1,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => stats.fail(display, &e),
+        }
+    }
+
+    pub fn remove_path(path: &Path, expected: &Path, min_age: Option<Duration>, stats: &mut Stats) {
+        let (Some(parent), Some(name)) = (expected.parent(), path.file_name()) else {
+            return stats.fail_msg(format!("Couldn't confirm where {} is.", path.display()));
+        };
+        let Ok(want) = fs::metadata(parent) else {
+            return stats.fail_msg(format!("Couldn't confirm where {} is.", path.display()));
+        };
+        // Pin the (already link-free, canonical) parent and check it's the
+        // same folder that was checked.
+        let pfd = match open_dir(parent, false) {
+            Ok(fd) => fd,
+            Err(e) => return stats.fail(path, &e),
+        };
+        let pst = match fstat(pfd.as_raw_fd()) {
+            Ok(s) => s,
+            Err(e) => return stats.fail(path, &e),
+        };
+        if ids(&pst) != (want.dev(), want.ino()) {
+            return stats.fail_msg(format!(
+                "{} changed while Roomy was working, so it was left alone.",
+                path.display()
+            ));
+        }
+        let Ok(cn) = cstr(name) else { return };
+        rm_at(pfd.as_raw_fd(), &cn, path, ids(&pst).0, min_age, stats);
+    }
+
+    pub fn remove_children(
+        dir: &Path,
+        min_age: Option<Duration>,
+        stats: &mut Stats,
+        check: &mut Check<'_>,
+    ) -> io::Result<()> {
+        let fd = open_dir(dir, false)?;
+        let dev = ids(&fstat(fd.as_raw_fd())?).0;
+        for c in list(fd.as_raw_fd())? {
+            let child = dir.join(&c);
+            if let Err(reason) = check(&child) {
+                stats.fail_msg(reason);
+                continue;
+            }
+            let cn = cstr(&c)?;
+            rm_at(fd.as_raw_fd(), &cn, &child, dev, min_age, stats);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -443,20 +837,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let link = tmp.path().join("link");
         make_dir_link(outside.path(), &link);
-        for mode in [Mode::Permanent, Mode::Trash] {
-            if !link.exists() {
-                make_dir_link(outside.path(), &link);
-            }
-            delete_path(&open_guard(), &link, mode).unwrap();
-            assert!(
-                fs::symlink_metadata(&link).is_err(),
-                "link removed ({mode:?})"
-            );
-            assert!(
-                outside.path().join("precious.txt").exists(),
-                "target kept ({mode:?})"
-            );
-        }
+        // Trash can't hold a link recoverably: refused, nothing removed.
+        assert!(delete_path(&open_guard(), &link, Mode::Trash).is_err());
+        assert!(
+            fs::symlink_metadata(&link).is_ok(),
+            "link kept in trash mode"
+        );
+        // Permanent removes just the link.
+        delete_path(&open_guard(), &link, Mode::Permanent).unwrap();
+        assert!(fs::symlink_metadata(&link).is_err(), "link removed");
+        assert!(outside.path().join("precious.txt").exists(), "target kept");
     }
 
     #[test]
@@ -602,6 +992,32 @@ mod tests {
         remove_tree(&d, None, &mut stats);
         assert!(d.join("deep").join("pagefile.sys").exists());
         assert!(stats.failed >= 1);
+    }
+
+    #[test]
+    fn removal_refuses_a_target_that_is_not_where_it_was_checked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let other = tmp.path().join("other");
+        fs::create_dir_all(&real).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        fs::write(real.join("f"), b"x").unwrap();
+        // Pretend the check resolved somewhere else: the pinned handle won't match.
+        let mut stats = Stats::default();
+        sys::remove_path(&real, &other.join("real"), None, &mut stats);
+        assert!(real.join("f").exists(), "nothing removed");
+        assert_eq!(stats.failed, 1);
+    }
+
+    #[test]
+    fn mount_points_are_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!is_mount_point(tmp.path()));
+        #[cfg(windows)]
+        assert!(is_mount_point(Path::new(&format!(
+            "{}\\",
+            std::env::var("SystemDrive").unwrap_or("C:".into())
+        ))));
     }
 
     #[test]

@@ -344,6 +344,40 @@ fn path_contains(outer: &Path, inner: &Path) -> bool {
     !o.is_empty() && i.len() > o.len() && i[..o.len()] == o[..]
 }
 
+/// Path components that mark an installed or system location.
+const INSTALLED_AREA_NAMES: &[&str] = &[
+    "appdata",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "windows",
+    "node_modules",
+    "library",
+    ".cargo",
+    ".rustup",
+    "site-packages",
+    "steamapps",
+    "xboxgames",
+    "windowsapps",
+    "$recycle.bin",
+    "applications",
+    ".nvm",
+    ".npm",
+];
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    let k = |p: &Path| {
+        let s = p.to_string_lossy().replace('/', "\\");
+        let s = s.trim_end_matches('\\').to_string();
+        if cfg!(windows) {
+            s.to_lowercase()
+        } else {
+            s
+        }
+    };
+    k(a) == k(b)
+}
+
 fn lower(s: &str) -> String {
     s.to_lowercase()
 }
@@ -868,8 +902,34 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
             }
         }
     }
-    find_projects(&b, 0, &mut project_roots, &not_roots);
-    if !not_roots.contains(&0) && !b.claims.contains_key(&0) {
+    let scan_root = PathBuf::from(&tree.root_path);
+    // Scanning inside an app, game, system, cache or installed-package area:
+    // nothing in it is the user's project, whatever marker files it holds.
+    let installed_area = env
+        .app_data_roots
+        .iter()
+        .chain(env.program_files.iter())
+        .chain(env.system_root.iter())
+        .any(|r| same_path(r, &scan_root) || path_contains(r, &scan_root))
+        || scan_root.components().any(|c| {
+            INSTALLED_AREA_NAMES.contains(&c.as_os_str().to_string_lossy().to_lowercase().as_str())
+        })
+        || b.root_claim
+            .map(|(_, e, _)| {
+                matches!(
+                    b.entities[e as usize].kind,
+                    EntityKind::App
+                        | EntityKind::Game
+                        | EntityKind::System
+                        | EntityKind::Cache
+                        | EntityKind::Hidden
+                )
+            })
+            .unwrap_or(false);
+    if !installed_area {
+        find_projects(&b, 0, &mut project_roots, &not_roots);
+    }
+    if !installed_area && !not_roots.contains(&0) && !b.claims.contains_key(&0) {
         let root_path = PathBuf::from(&tree.root_path);
         let (proj_name, proj_path) = if has_marker(tree, 0) {
             (Some(tree.name(0).to_string()), Some(root_path.clone()))
@@ -1213,7 +1273,7 @@ fn attribute_walk(b: &mut Builder, env: &Env, is_volume: bool) -> Storage {
                 }
             }
         }
-        if node.kind == KIND_DIR {
+        if node.kind == KIND_DIR || node.first_child != NONE {
             if let Owner::Entity(e, loc) = owner {
                 let ent_kind = b.entities[e as usize].kind;
                 let name = lower(tree.name(n));
@@ -1864,5 +1924,88 @@ mod tests {
             p.reclaim_build, 7,
             "deleting node_modules frees only what has no other name"
         );
+    }
+
+    #[test]
+    fn every_part_of_the_gap_gets_its_bytes() {
+        let r = root();
+        let mut gap = RawDir::new("System & unreadable space".into(), 0);
+        gap.kind = KIND_GAP;
+        for (name, size) in [
+            ("NTFS file table ($MFT)", 300),
+            ("Recycle Bin (not listable)", 200),
+            ("Restore points, reserved & unreadable", 500),
+        ] {
+            gap.files.push(RawEntry {
+                name: name.into(),
+                size,
+                logical: size,
+                kind: KIND_GAP_PART,
+                ..Default::default()
+            });
+        }
+        gap.finish();
+        gap.total_files = 0;
+        let mut drive = d("C", vec![f("a.bin", 10)], vec![]);
+        drive.dirs.push(gap);
+        drive.finish();
+        let tree = Tree::from_raw(drive, r.to_string_lossy().into_owned());
+        let s = attribute(&tree, &Catalog::default(), &Env::default(), true);
+        assert_eq!(by_name(&s, "NTFS file table ($MFT)").size, 300);
+        assert_eq!(by_name(&s, "Recycle Bin").size, 200);
+        assert_eq!(by_name(&s, "Recycle Bin").category, Category::Caches);
+        assert_eq!(
+            by_name(&s, "Restore points, reserved & unreadable").size,
+            500
+        );
+        assert_eq!(s.entities.iter().map(|e| e.size).sum::<u64>(), 1010);
+    }
+
+    #[test]
+    fn installed_apps_are_never_projects() {
+        let (_, _, env) = fixture();
+        let r = root();
+        let app_dir = r.join("Program Files").join("Chatty");
+        let mut chatty = AppRecord::new("Chatty", AppKind::App, "Windows");
+        chatty.install_dirs.push(app_dir.clone());
+        let cat = Catalog { apps: vec![chatty] };
+        let resources = || {
+            d(
+                "resources",
+                vec![],
+                vec![d(
+                    "app",
+                    vec![f("package.json", 1)],
+                    vec![d("node_modules", vec![f("dep.js", 900)], vec![])],
+                )],
+            )
+        };
+        // Whole-drive scan: the installed app owns it all; no project, no junk.
+        let pf = d(
+            "Program Files",
+            vec![],
+            vec![d("Chatty", vec![f("chatty.exe", 50)], vec![resources()])],
+        );
+        let mut drive = d("C", vec![], vec![pf]);
+        drive.finish();
+        let tree = Tree::from_raw(drive, r.to_string_lossy().into_owned());
+        let s = attribute(&tree, &cat, &env, true);
+        assert!(s
+            .entities
+            .iter()
+            .all(|e| e.category != Category::Projects || e.size == 0));
+        assert!(crate::suggest::project_junk_from(&s.entities, &tree).is_none());
+        // Scanning the app's resources\app folder directly: still the app's.
+        let root_dir = app_dir.join("resources").join("app");
+        let direct = d(
+            "app",
+            vec![f("package.json", 1)],
+            vec![d("node_modules", vec![f("dep.js", 900)], vec![])],
+        );
+        let tree = Tree::from_raw(direct, root_dir.to_string_lossy().into_owned());
+        let s = attribute(&tree, &cat, &env, false);
+        assert_eq!(by_name(&s, "Chatty").size, 901);
+        assert!(s.entities.iter().all(|e| e.category != Category::Projects));
+        assert!(s.entities.iter().all(|e| e.junk_dirs.is_empty()));
     }
 }

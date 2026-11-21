@@ -5,7 +5,7 @@
 
 use crate::delete::Mode;
 use crate::scan;
-use crate::tree::{Tree, KIND_DIR};
+use crate::tree::Tree;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -681,114 +681,51 @@ pub fn compute(elevated: bool) -> Vec<Suggestion> {
 
 /// Folder names that are rebuildable build output, with the file that must
 /// sit next to them to prove they belong to a project.
-const PROJECT_JUNK: &[(&str, &[&str], &str)] = &[
-    ("node_modules", &["package.json"], "Node.js packages"),
-    ("target", &["Cargo.toml"], "Rust build output"),
-    (".next", &["package.json"], "Next.js build output"),
-    (".nuxt", &["package.json"], "Nuxt build output"),
-    (".svelte-kit", &["package.json"], "SvelteKit build output"),
-    (".turbo", &["package.json", "turbo.json"], "Turborepo cache"),
-    (".parcel-cache", &["package.json"], "Parcel cache"),
-    (".angular", &["angular.json"], "Angular cache"),
-    (
-        ".gradle",
-        &[
-            "build.gradle",
-            "build.gradle.kts",
-            "settings.gradle",
-            "settings.gradle.kts",
-        ],
-        "Gradle project cache",
-    ),
-    (
-        ".venv",
-        &["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"],
-        "Python virtual environment",
-    ),
-    (
-        "venv",
-        &["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"],
-        "Python virtual environment",
-    ),
-    (
-        "obj",
-        &["*.csproj", "*.fsproj", "*.vbproj"],
-        ".NET build output",
-    ),
-    (
-        "DerivedData",
-        &["*.xcodeproj", "*.xcworkspace"],
-        "Xcode build output",
-    ),
-];
-
-/// Ancestors that mean "this isn't the user's project".
-const NOT_PROJECTS: &[&str] = &[
-    "appdata",
-    "program files",
-    "program files (x86)",
-    "programdata",
-    "windows",
-    ".cargo",
-    ".rustup",
-    ".npm",
-    ".nvm",
-    ".vscode",
-    ".cursor",
-    "library",
-    "node_modules",
-    "$recycle.bin",
-    ".git",
-    "scoop",
-    "system volume information",
-    ".local",
-    ".gradle",
-    ".m2",
-    "go",
-];
-
-fn name_eq(a: &str, b: &str) -> bool {
-    if cfg!(windows) {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
+/// Plain-language names for build/dependency folders.
+fn junk_label(dir: &str) -> &'static str {
+    match dir.to_lowercase().as_str() {
+        "node_modules" => "Node.js packages",
+        "target" => "Rust build output",
+        ".next" => "Next.js build output",
+        ".nuxt" => "Nuxt build output",
+        ".svelte-kit" => "SvelteKit build output",
+        ".turbo" => "Turborepo cache",
+        ".parcel-cache" => "Parcel cache",
+        ".angular" => "Angular cache",
+        ".gradle" => "Gradle project cache",
+        ".venv" | "venv" => "Python virtual environment",
+        "__pycache__" => "Python bytecode cache",
+        "obj" => ".NET build output",
+        "intermediate" | "deriveddatacache" => "Unreal build cache",
+        ".godot" => "Godot import cache",
+        _ => "Build output",
     }
 }
 
-/// Find rebuildable project folders (node_modules, target, …) in a scan.
-pub fn project_junk(tree: &Tree) -> Option<Suggestion> {
+/// Rebuildable project folders, taken from the Storage attribution so the
+/// same rules apply everywhere: only detected user projects (never inside an
+/// app, game, system or installed-package location), only verified build or
+/// dependency folders.
+pub fn project_junk_from(entities: &[crate::storage::Entity], tree: &Tree) -> Option<Suggestion> {
     const MIN: u64 = 10 * 1024 * 1024;
     let mut items = Vec::new();
-    let mut stack = vec![0u32];
-    while let Some(id) = stack.pop() {
-        for c in tree.children(id) {
-            let n = &tree.nodes[c as usize];
-            if n.kind != KIND_DIR || n.size < MIN {
+    for e in entities
+        .iter()
+        .filter(|e| e.category == crate::storage::Category::Projects)
+    {
+        for &n in &e.junk_dirs {
+            let Some(node) = tree.get(n) else { continue };
+            if node.size < MIN || tree.is_pseudo(n) {
                 continue;
             }
-            let name = tree.name(c);
-            let hit = PROJECT_JUNK.iter().find(|(dir, markers, _)| {
-                name_eq(name, dir)
-                    && tree.children(id).any(|s| {
-                        let sn = tree.name(s);
-                        markers.iter().any(|m| wildcard_match(m, sn))
-                    })
+            items.push(Item {
+                path: tree.path(n).to_string_lossy().into_owned(),
+                label: format!("{} · {}", e.name, junk_label(tree.name(n))),
+                size: node.size,
+                files: node.files as u64,
+                mtime: e.mtime,
+                default_selected: false,
             });
-            if let Some((_, _, desc)) = hit {
-                let project = tree.name(id);
-                items.push(Item {
-                    path: tree.path(c).to_string_lossy().into_owned(),
-                    label: format!("{project} · {desc}"),
-                    size: n.size,
-                    files: n.files as u64,
-                    mtime: tree.nodes[id as usize].mtime,
-                    default_selected: false,
-                });
-                continue; // don't look inside
-            }
-            if !NOT_PROJECTS.iter().any(|x| name.eq_ignore_ascii_case(x)) {
-                stack.push(c);
-            }
         }
     }
     if items.is_empty() {
@@ -918,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_project_junk_only_next_to_markers() {
+    fn finds_project_junk_only_in_real_projects() {
         const MB: u64 = 1024 * 1024;
         let proj = dir(
             "webapp",
@@ -930,20 +867,19 @@ mod tests {
             vec![],
             vec![dir("node_modules", vec![f("big", 50 * MB)], vec![])],
         );
-        let appdata = dir(
-            "AppData",
-            vec![],
-            vec![dir(
-                "tool",
-                vec![f("package.json", 1)],
-                vec![dir("node_modules", vec![f("x", 50 * MB)], vec![])],
-            )],
+        let root = dir("root", vec![], vec![proj, stray]);
+        let tree = Tree::from_raw(
+            root,
+            if cfg!(windows) {
+                r"C:\r".into()
+            } else {
+                "/r".into()
+            },
         );
-        let root = dir("root", vec![], vec![proj, stray, appdata]);
-        let tree = Tree::from_raw(root, "/r".into());
-        let s = project_junk(&tree).unwrap();
-        assert_eq!(s.items.len(), 1);
-        assert!(s.items[0].label.starts_with("webapp"));
-        assert!(!s.items[0].default_selected);
+        let s = crate::storage::attribute(&tree, &Default::default(), &Default::default(), false);
+        let sug = project_junk_from(&s.entities, &tree).unwrap();
+        assert_eq!(sug.items.len(), 1);
+        assert!(sug.items[0].label.starts_with("webapp"));
+        assert!(!sug.items[0].default_selected);
     }
 }

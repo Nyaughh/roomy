@@ -131,6 +131,8 @@ export interface DeleteReport {
   mode: Mode;
   results: ItemResult[];
   bytes: number;
+  /** Removed bytes still used by another hard link (not freed). */
+  shared: number;
   summary: Summary | null;
 }
 
@@ -166,6 +168,8 @@ export interface Suggestion {
 
 export interface CleanReport {
   freed: number;
+  /** Removed outside the scan: measured, not hard-link checked. */
+  outside: number;
   cleaned: number;
   failed: number;
   errors: string[];

@@ -461,6 +461,11 @@ export function Suggestions({
                 plus {bytes(result.trashed)} moved to the {binName}
               </div>
             )}
+            {result.report.outside > 0 && (
+              <div className="muted" style={{ marginTop: 6 }}>
+                plus about {bytes(result.report.outside)} removed from folders outside this scan
+              </div>
+            )}
           </div>
           {(result.report.failed > 0 || result.report.errors.length > 0) && (
             <div className="warn-box" style={{ background: "var(--amber-soft)" }}>
