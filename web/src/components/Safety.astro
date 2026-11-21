@@ -1,201 +1,248 @@
 ---
-import Icon from "./Icon.astro";
-
+// How safe clean-up works, built around Roomy's final review screen.
 const steps = [
   {
-    n: "1",
-    title: "Roomy suggests",
-    body: "It only suggests well-known clutter: temp files, caches, crash dumps, the Recycle Bin. Things your own work lives in, like duplicates and project folders, are opt-in and never pre-selected.",
+    t: "Roomy suggests.",
+    b: "Only well-known clutter is ticked for you: temporary files, app caches, crash dumps, old update downloads. Emptying the Recycle Bin, duplicate files and project build folders are offered too, but never pre-selected.",
   },
   {
-    n: "2",
-    title: "It explains",
-    body: "Each item says, in plain words, what it is, why it's there, and whether it comes back on its own. No jargon, no scary percentages.",
+    t: "It explains.",
+    b: "Every item says what it is, why it's there, and whether it comes back on its own, in plain words.",
   },
   {
-    n: "3",
-    title: "You review",
-    body: "Before anything happens you see a final list: every item, its size, and exactly how it will be removed. Nothing is touched until you confirm.",
+    t: "You review.",
+    b: "A final list shows each item, its size and exactly how it will be removed. Nothing happens until you confirm.",
   },
   {
-    n: "4",
-    title: "It cleans, gently",
-    body: "Files you pick go to the Recycle Bin or Trash by default, so you can change your mind. Caches and temp files are deleted for real, since binning them would free nothing.",
+    t: "It cleans.",
+    b: "Caches, temporary files and project build folders are deleted permanently, since moving them to the bin would free nothing. Duplicates and anything you delete yourself go to the Recycle Bin or Trash by default.",
   },
 ];
 
-const rails = [
-  { icon: "lock", text: "Critical system folders are hard-blocked. Roomy simply won't delete them." },
-  { icon: "undo", text: "Recycle Bin or Trash by default for your own files. Permanent delete is a separate, confirmed action." },
-  { icon: "check", text: "Nothing is ever pre-selected that holds your own content." },
-  { icon: "wifi-off", text: "Works fully offline. Your file list never leaves your computer." },
+const review = [
+  { n: "App caches", gb: "9.2 GB", how: "perm" },
+  { n: "Temporary files", gb: "6.4 GB", how: "perm" },
+  { n: "npm cache", gb: "4.6 GB", how: "perm" },
+  { n: "Crash dumps & error reports", gb: "1.8 GB", how: "perm" },
+  { n: "Duplicate files (12)", gb: "2.3 GB", how: "bin" },
 ] as const;
+
+const rails = [
+  { t: "System folders are off-limits.", b: "Critical system paths are hard-blocked. Roomy won't delete them, whatever you select." },
+  { t: "The bin is the default.", b: "Files and folders you delete from a view go to the Recycle Bin or Trash. Deleting permanently is a separate, confirmed action." },
+  { t: "Nothing of yours is pre-selected.", b: "Duplicates, project folders and the bin itself are opt-in, every time." },
+  { t: "Offline, always.", b: "No telemetry, no network calls. Your file list stays on your computer." },
+];
 ---
 
 <section id="safety" class="section safety" aria-labelledby="safety-title">
   <div class="container">
     <div class="section-head">
-      <p class="eyebrow">How safe cleanup works</p>
-      <h2 id="safety-title">Cleaning up shouldn't feel like defusing a bomb.</h2>
-      <p>
-        Roomy is careful by design. You always know what will be removed, how it will be removed, and how to get it
-        back.
-      </p>
+      <p class="kicker">Safe clean-up</p>
+      <h2 id="safety-title" class="title-1">Clear space without the second-guessing.</h2>
+      <p class="lead">You always know what will be removed, how it will be removed, and what you can get back.</p>
     </div>
 
-    <ol class="steps">
-      {steps.map((s) => (
-        <li class="card step">
-          <span class="num" aria-hidden="true">{s.n}</span>
-          <h3>{s.title}</h3>
-          <p>{s.body}</p>
-        </li>
-      ))}
-    </ol>
-
-    <div class="rails card">
-      <div class="rails-head">
-        <span class="shield"><Icon name="shield" size={26} /></span>
-        <div>
-          <h3>Safety rails, always on</h3>
-          <p>Guardrails you can't accidentally switch off.</p>
-        </div>
-      </div>
-      <ul>
-        {rails.map((r) => (
+    <div class="cols">
+      <ol class="steps">
+        {steps.map((s, i) => (
           <li>
-            <span class="ri"><Icon name={r.icon} size={17} /></span>
-            {r.text}
+            <span class="n num" aria-hidden="true">{i + 1}</span>
+            <div>
+              <h3 class="title-3">{s.t}</h3>
+              <p>{s.b}</p>
+            </div>
           </li>
         ))}
-      </ul>
+      </ol>
+
+      <figure class="sheet" aria-label="Example of Roomy's review screen">
+        <div class="sheet-head">
+          <p class="sh-t">Review clean-up</p>
+          <p class="sh-s">5 items · <span class="num">24.3 GB</span></p>
+        </div>
+        <ul>
+          {review.map((r) => (
+            <li>
+              <span class="rn">{r.n}</span>
+              <span class="rs num">{r.gb}</span>
+              <span class:list={["how", r.how]}>{r.how === "perm" ? "Deleted permanently" : "Moved to Recycle Bin"}</span>
+            </li>
+          ))}
+        </ul>
+        <p class="note">
+          Caches and temporary files are deleted permanently: moving them to the Recycle Bin wouldn't free any space.
+        </p>
+        <div class="sheet-foot">
+          <span class="btn btn-secondary btn-sm fake">Cancel</span>
+          <span class="btn btn-primary btn-sm fake">Clean up <span class="num">24.3 GB</span></span>
+        </div>
+        <figcaption>The last step before anything is removed.</figcaption>
+      </figure>
     </div>
+
+    <ul class="rails">
+      {rails.map((r) => (
+        <li>
+          <h3>{r.t}</h3>
+          <p>{r.b}</p>
+        </li>
+      ))}
+    </ul>
   </div>
 </section>
 
 <style>
-  .safety {
-    position: relative;
+  .cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(2rem, 6vw, 5rem);
+    margin-top: clamp(3rem, 6vw, 4.5rem);
+    align-items: start;
   }
   .steps {
     list-style: none;
     margin: 0;
     padding: 0;
+    border-top: 1px solid var(--line);
+  }
+  .steps li {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: 2.5rem 1fr;
+    gap: 0.5rem;
+    padding: 1.4rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .n {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--ink-3);
+    line-height: 1.3;
+  }
+  .steps p {
+    margin-top: 0.35rem;
+    color: var(--ink-2);
+  }
+
+  .sheet {
+    position: sticky;
+    top: 92px;
+    margin: 0;
+    padding: 1.25rem;
+    border-radius: var(--radius-card);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow-window);
+    font-size: 0.9rem;
+  }
+  .sheet-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
     gap: 1rem;
-    counter-reset: step;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid var(--line);
   }
-  .step {
-    padding: 1.6rem;
+  .sh-t {
+    font-weight: 600;
+    font-size: 1.05rem;
   }
-  .step:not(:last-child)::after {
-    /* connector between steps */
-    content: "";
-    position: absolute;
-    top: 2.55rem;
-    right: -1rem;
-    width: 1rem;
-    height: 2px;
-    background: linear-gradient(90deg, var(--border-strong), transparent);
+  .sh-s {
+    color: var(--ink-2);
   }
-  .num {
-    display: inline-grid;
-    place-items: center;
-    width: 38px;
-    height: 38px;
-    border-radius: 12px;
-    background: var(--grad);
-    color: var(--ink);
-    font-weight: 700;
+  .sheet ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
   }
-  .step h3 {
+  .sheet li {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.3rem 1rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .rn {
+    font-weight: 560;
+  }
+  .rs {
+    color: var(--ink-2);
+  }
+  .how {
+    grid-column: 1 / -1;
+    justify-self: start;
+    padding: 0.1rem 0.55rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.78rem;
+    font-weight: 560;
+  }
+  .how.perm {
+    background: var(--danger-wash);
+    color: var(--danger);
+  }
+  .how.bin {
+    background: var(--sunken);
+    color: var(--ink-2);
+  }
+  .note {
+    margin-top: 0.9rem;
+    color: var(--ink-2);
+    font-size: 0.85rem;
+  }
+  .sheet-foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.6rem;
     margin-top: 1.1rem;
-    font-size: 1.15rem;
   }
-  .step p {
-    margin-top: 0.55rem;
-    color: var(--muted);
-    font-size: 0.95rem;
+  .fake {
+    cursor: default;
+    pointer-events: none;
+  }
+  figcaption {
+    margin-top: 1rem;
+    color: var(--ink-3);
+    font-size: 0.82rem;
   }
 
   .rails {
     display: grid;
-    grid-template-columns: minmax(220px, 0.8fr) 2fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 2rem;
-    align-items: center;
-    margin-top: 1rem;
-    padding: clamp(1.5rem, 3vw, 2.2rem);
-    background:
-      radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--mint) 9%, transparent), transparent 60%),
-      var(--surface);
-  }
-  .rails-head {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-  }
-  .shield {
-    display: grid;
-    place-items: center;
-    flex: none;
-    width: 54px;
-    height: 54px;
-    border-radius: 16px;
-    color: var(--mint-text);
-    background: color-mix(in srgb, var(--mint) 13%, transparent);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--mint) 25%, transparent) inset;
-  }
-  .rails h3 {
-    font-size: 1.2rem;
-  }
-  .rails-head p {
-    margin-top: 0.3rem;
-    color: var(--muted);
-    font-size: 0.95rem;
-  }
-  .rails ul {
-    list-style: none;
-    margin: 0;
+    margin: clamp(3.5rem, 7vw, 5rem) 0 0;
     padding: 0;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.9rem 1.6rem;
+    list-style: none;
   }
   .rails li {
-    display: flex;
-    gap: 0.7rem;
-    align-items: flex-start;
-    font-size: 0.95rem;
-    color: var(--text);
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--line-strong);
   }
-  .ri {
-    display: grid;
-    place-items: center;
-    flex: none;
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
-    color: var(--accent-text);
-    background: var(--raised);
-    border: 1px solid var(--border);
+  .rails h3 {
+    font-size: 1rem;
+    letter-spacing: -0.01em;
+  }
+  .rails p {
+    margin-top: 0.35rem;
+    color: var(--ink-2);
+    font-size: 0.9375rem;
   }
 
-  @media (max-width: 1000px) {
-    .steps {
-      grid-template-columns: repeat(2, 1fr);
+  @media (max-width: 900px) {
+    .cols {
+      grid-template-columns: 1fr;
     }
-    .step::after {
-      display: none;
+    .sheet {
+      position: static;
     }
     .rails {
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
-  @media (max-width: 600px) {
-    .steps,
-    .rails ul {
+  @media (max-width: 560px) {
+    .rails {
       grid-template-columns: 1fr;
+      gap: 1.25rem;
     }
   }
 </style>

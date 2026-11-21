@@ -1,11 +1,11 @@
 {
   "name": "Roomy",
   "short_name": "Roomy",
-  "description": "Make room. A storage analyzer and cleaner for Windows and macOS.",
+  "description": "Make room. Storage, like your phone's, but it shows everything. For Windows and Mac.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0B0C16",
-  "theme_color": "#0B0C16",
+  "background_color": "#F4F2EC",
+  "theme_color": "#F4F2EC",
   "icons": [
     {
       "src": "/icon-192.png",

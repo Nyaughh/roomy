@@ -1,0 +1,620 @@
+---
+// Hero product shot: Roomy's Storage view. A phone-style list of what's on the drive, by category, over a
+// stacked bar that covers all used space. Drawn in HTML/CSS with brand tokens so it is crisp and themeable.
+// The clean-up moment: "Caches & temp" shrinks and the room it frees turns butter.
+import Glyph from "./Glyph.astro";
+
+const TOTAL = 512;
+// Sizes in GB; together they are 390 GB of used space.
+const rows = [
+  { name: "Media", sub: "Videos, photos and music", gb: 84, viz: "powder" },
+  { name: "Apps", sub: "86 apps, with their data and caches", gb: 78, viz: "lilac", open: true },
+  { name: "Games", sub: "7 games", gb: 54, viz: "pistachio" },
+  { name: "Projects", sub: "12 code projects", gb: 52, viz: "mist" },
+  { name: "System", sub: "Includes 14 GB hidden", gb: 50, viz: "slate", hidden: 14 },
+  { name: "Downloads", sub: "418 files", gb: 32, viz: "peach" },
+  { name: "Caches & temp", sub: "Safe to clear", gb: 22, viz: "blush", clean: true },
+  { name: "Documents", sub: "2,904 files", gb: 12, viz: "sand" },
+  { name: "Other", sub: "Everything else", gb: 6, viz: "stone" },
+];
+const apps = [
+  { n: "Photoshop", gb: "14.2 GB", parts: "App 4.1 · Data 8.6 · Cache 1.5" },
+  { n: "Teams", gb: "6.3 GB", parts: "App 1.2 · Data 2.9 · Cache 2.2" },
+];
+const pct = (gb: number) => ((gb / TOTAL) * 100).toFixed(2);
+// Bar order follows the list; System's hidden part is drawn hatched right after it.
+const segs = rows.flatMap((r) =>
+  r.hidden
+    ? [
+        { gb: r.gb - r.hidden, viz: r.viz, clean: false, hatch: false },
+        { gb: r.hidden, viz: "stone", clean: false, hatch: true },
+      ]
+    : [{ gb: r.gb, viz: r.viz, clean: !!r.clean, hatch: false }],
+);
+---
+
+<div
+  class="pw armed"
+  data-pw
+  role="img"
+  aria-label="The Roomy Storage screen for a 512 gigabyte drive: Media 84, Apps 78 including their data and caches, Games 54, Projects 52, System 50 including 14 hidden, Downloads 32, Caches and temp 22, Documents 12 and Other 6 gigabytes, covering all used space. The 22 gigabytes of caches are cleared and shown as room made."
+>
+  <div class="win" aria-hidden="true">
+    <div class="chrome">
+      <span class="lights os-mac-flex"><i></i><i></i><i></i></span>
+      <span class="chrome-title">Roomy</span>
+      <span class="ctrls os-win-flex"><i class="min"></i><i class="max"></i><i class="cls"></i></span>
+    </div>
+
+    <div class="body">
+      <aside class="side">
+        <div class="side-brand"><Glyph size={16} /> Roomy</div>
+        <ul class="nav">
+          <li class="on"><span class="ni ni-storage"></span>Storage</li>
+          <li><span class="ni ni-explore"></span>Explore</li>
+          <li><span class="ni ni-types"></span>File types</li>
+          <li><span class="ni ni-largest"></span>Largest files</li>
+          <li><span class="ni ni-sugg"></span>Suggestions <b class="badge">22 GB</b></li>
+        </ul>
+        <div class="drive">
+          <p class="dn"><span class="os-win">Local Disk (C:)</span><span class="os-mac">Macintosh HD</span></p>
+          <p class="dm">512 GB · scanned just now</p>
+        </div>
+      </aside>
+
+      <section class="main">
+        <p class="h1">Storage</p>
+        <div class="summary">
+          <p class="used">
+            <span class="swap"><span class="a num">390 GB</span><span class="b num">368 GB</span></span>
+            <span class="of">used of 512 GB</span>
+          </p>
+          <p class="free"><span class="swap"><span class="a num">122 GB</span><span class="b num">144 GB</span></span> free</p>
+        </div>
+
+        <div class="bar">
+          {segs.map((s, i) => (
+            <span
+              class:list={["seg", { hatch: s.hatch, clean: s.clean }]}
+              style={`width:${pct(s.gb)}%;--fill:var(--viz-${s.viz});--i:${i}`}
+            ></span>
+          ))}
+          <span class="seg room"></span>
+          <span class="seg freeseg"></span>
+        </div>
+        <p class="all">Every gigabyte of used space is in a category below.</p>
+
+        <ul class="list">
+          {rows.map((r, i) => (
+            <li class:list={["row", { clean: r.clean, open: r.open }]} style={`--i:${i}`}>
+              <span class="ic" style={`--fill:var(--viz-${r.viz})`}></span>
+              <span class="rt">
+                <span class="rn">{r.name}</span>
+                <span class="rs">{r.sub}</span>
+                {r.clean && <span class="made">22 GB made room</span>}
+              </span>
+              <span class="rv num">
+                {r.clean ? (
+                  <span class="swap">
+                    <span class="a">{r.gb} GB</span>
+                    <span class="b">0.4 GB</span>
+                  </span>
+                ) : (
+                  `${r.gb} GB`
+                )}
+              </span>
+              <span class="chev"></span>
+              {r.open && (
+                <ul class="apps">
+                  {apps.map((a) => (
+                    <li>
+                      <span class="an">{a.n}</span>
+                      <span class="ap">{a.parts}</span>
+                      <span class="av num">{a.gb}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Play once the window is mostly in view (it can sit below the fold on phones).
+  const el = document.querySelector<HTMLElement>("[data-pw]");
+  if (el) {
+    if (!("IntersectionObserver" in window)) el.classList.add("play");
+    else {
+      const io = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            el.classList.add("play");
+            io.disconnect();
+          }
+        },
+        { threshold: 0.12 },
+      );
+      io.observe(el);
+    }
+  }
+</script>
+
+<style>
+  .pw {
+    --t0: 0.15s;
+    --tc: 2.6s; /* the clean-up moment */
+    font-size: 13px;
+    line-height: 1.3;
+    user-select: none;
+  }
+  .pw.armed:not(.play) *,
+  .pw.armed:not(.play) *::before,
+  .pw.armed:not(.play) *::after {
+    animation-play-state: paused !important;
+  }
+
+  .os-mac,
+  .os-mac-flex {
+    display: none;
+  }
+  .os-win-flex {
+    display: flex;
+  }
+  :global([data-os="mac"]) .os-mac {
+    display: inline;
+  }
+  :global([data-os="mac"]) .os-mac-flex {
+    display: flex;
+  }
+  :global([data-os="mac"]) .os-win,
+  :global([data-os="mac"]) .os-win-flex {
+    display: none;
+  }
+
+  .win {
+    border-radius: var(--radius-window);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow-window);
+    overflow: hidden;
+  }
+  .chrome {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    height: 36px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 560;
+  }
+  .chrome-title {
+    grid-column: 2;
+  }
+  .lights {
+    grid-column: 1;
+    grid-row: 1;
+    gap: 7px;
+  }
+  .lights i {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--line-strong);
+  }
+  .ctrls {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    gap: 16px;
+    padding-right: 4px;
+  }
+  .ctrls i {
+    position: relative;
+    width: 10px;
+    height: 10px;
+  }
+  .ctrls .min::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 5px;
+    height: 1px;
+    background: var(--ink-3);
+  }
+  .ctrls .max {
+    border: 1px solid var(--ink-3);
+    border-radius: 2px;
+  }
+  .ctrls .cls::before,
+  .ctrls .cls::after {
+    content: "";
+    position: absolute;
+    left: -1px;
+    right: -1px;
+    top: 4.5px;
+    height: 1px;
+    background: var(--ink-3);
+    transform: rotate(45deg);
+  }
+  .ctrls .cls::after {
+    transform: rotate(-45deg);
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+  }
+
+  /* sidebar */
+  .side {
+    display: flex;
+    flex-direction: column;
+    padding: 14px 10px;
+    border-right: 1px solid var(--line);
+    background: var(--paper);
+  }
+  .side-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 8px 14px;
+    font-weight: 600;
+    font-size: 13.5px;
+  }
+  .nav {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .nav li {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 8px;
+    border-radius: 8px;
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+  .nav li.on {
+    background: var(--sunken);
+    color: var(--ink);
+  }
+  .ni {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    border: 1.5px solid currentColor;
+    border-radius: 3px;
+  }
+  .ni-storage {
+    border-radius: 3px;
+    background: linear-gradient(currentColor, currentColor) 0 7px / 100% 1.5px no-repeat;
+  }
+  .ni-explore {
+    background:
+      linear-gradient(currentColor, currentColor) 5px 0 / 1.5px 100% no-repeat,
+      linear-gradient(currentColor, currentColor) 5px 5px / 100% 1.5px no-repeat;
+  }
+  .ni-types {
+    border-radius: 50%;
+    border-right-color: transparent;
+  }
+  .ni-largest {
+    border: 0;
+    border-radius: 0;
+    background: repeating-linear-gradient(currentColor 0 1.5px, transparent 1.5px 5px);
+  }
+  .ni-sugg {
+    border-radius: 50%;
+    border-style: dashed;
+  }
+  .badge {
+    margin-left: auto;
+    padding: 1px 7px;
+    border-radius: var(--radius-pill);
+    background: var(--butter-wash);
+    color: var(--butter-deep);
+    font-size: 11px;
+    font-weight: 600;
+    animation: fade-out var(--dur-slow) var(--ease) calc(var(--tc) + 0.2s) both;
+  }
+  .drive {
+    margin-top: auto;
+    padding: 10px 8px 2px;
+    border-top: 1px solid var(--line);
+  }
+  .dn {
+    font-weight: 600;
+    font-size: 12.5px;
+  }
+  .dm {
+    margin-top: 2px;
+    color: var(--ink-2);
+    font-size: 11.5px;
+  }
+
+  /* main */
+  .main {
+    min-width: 0;
+    padding: 20px 24px 22px;
+  }
+  .h1 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .summary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .used {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .used .swap {
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+  .of {
+    color: var(--ink-2);
+  }
+  .free {
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .free .swap {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .swap {
+    display: inline-grid;
+  }
+  .swap > span {
+    grid-area: 1 / 1;
+  }
+  .swap .a {
+    animation: fade-out var(--dur-base) var(--ease) calc(var(--tc) + 0.15s) both;
+  }
+  .swap .b {
+    animation: fade-in var(--dur-slow) var(--ease) calc(var(--tc) + 0.3s) both;
+  }
+
+  .bar {
+    display: flex;
+    gap: 2px;
+    height: 16px;
+    margin-top: 12px;
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .seg {
+    flex: none;
+    border-radius: 3px;
+    background: var(--fill);
+    transform-origin: left;
+    animation: grow 0.6s var(--ease) calc(var(--t0) + var(--i) * 0.05s) both;
+  }
+  .seg.hatch {
+    background:
+      repeating-linear-gradient(135deg, var(--viz-hatch) 0 2px, transparent 2px 6px),
+      var(--fill);
+  }
+  .seg.clean {
+    animation:
+      grow 0.6s var(--ease) calc(var(--t0) + var(--i) * 0.05s) both,
+      to-butter var(--dur-base) var(--ease) var(--tc) forwards,
+      collapse var(--dur-slow) var(--ease) calc(var(--tc) + 0.5s) forwards;
+  }
+  .seg.room {
+    width: 0;
+    background: var(--viz-highlight);
+    animation: room-open var(--dur-slow) var(--ease) calc(var(--tc) + 0.5s) forwards;
+  }
+  .seg.freeseg {
+    flex: 1;
+    background: var(--sunken);
+    box-shadow: 0 0 0 1px var(--line-strong) inset;
+    animation: none;
+  }
+  .all {
+    margin-top: 8px;
+    color: var(--ink-3);
+    font-size: 11.5px;
+  }
+
+  .list {
+    list-style: none;
+    margin: 16px 0 0;
+    padding: 0 0 0 0;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    overflow: hidden;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 2px 12px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+    animation: fade-in var(--dur-slow) var(--ease) calc(0.5s + var(--i) * 0.05s) both;
+  }
+  .row:last-child {
+    border-bottom: 0;
+  }
+  .ic {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    background: var(--fill);
+  }
+  .rt {
+    display: grid;
+    min-width: 0;
+  }
+  .rn {
+    font-weight: 600;
+  }
+  .rs {
+    color: var(--ink-2);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rv {
+    font-weight: 560;
+    text-align: right;
+  }
+  .chev {
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid var(--ink-3);
+    border-bottom: 1.5px solid var(--ink-3);
+    transform: rotate(-45deg);
+    margin-left: 2px;
+  }
+  .row.open .chev {
+    transform: rotate(45deg);
+  }
+  .made {
+    justify-self: start;
+    margin-top: 4px;
+    padding: 2px 9px;
+    border-radius: var(--radius-pill);
+    background: var(--viz-highlight);
+    color: var(--butter-ink);
+    font-size: 11.5px;
+    font-weight: 600;
+    animation: pop var(--dur-slow) var(--ease) calc(var(--tc) + 0.6s) both;
+  }
+  .row.clean .ic {
+    animation: to-butter var(--dur-base) var(--ease) var(--tc) forwards;
+  }
+  .apps {
+    grid-column: 2 / -1;
+    list-style: none;
+    margin: 6px 0 2px;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+  .apps li {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px;
+    align-items: baseline;
+    padding: 7px 0 0;
+  }
+  .an {
+    font-weight: 560;
+  }
+  .ap {
+    color: var(--ink-2);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .av {
+    color: var(--ink-2);
+    padding-right: 21px;
+  }
+
+  @keyframes grow {
+    from {
+      transform: scaleX(0);
+    }
+  }
+  @keyframes to-butter {
+    to {
+      background: var(--viz-highlight);
+    }
+  }
+  @keyframes collapse {
+    to {
+      width: 0.08%;
+      opacity: 0;
+    }
+  }
+  @keyframes room-open {
+    to {
+      width: 4.3%;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+
+  @media (max-width: 1000px) {
+    .body {
+      grid-template-columns: 1fr;
+    }
+    .side {
+      display: none;
+    }
+  }
+  @media (max-width: 640px) {
+    .pw {
+      font-size: 12.5px;
+    }
+    .main {
+      padding: 14px;
+    }
+    .used .swap {
+      font-size: 24px;
+    }
+    .row {
+      padding: 8px 10px;
+      gap: 2px 10px;
+    }
+    .ap {
+      display: none;
+    }
+    .row:nth-child(n + 8) {
+      display: none;
+    }
+    .row:nth-child(7) {
+      border-bottom: 0;
+    }
+  }
+  @media (max-width: 400px) {
+    .summary {
+      flex-direction: column;
+      gap: 6px;
+    }
+    .rs {
+      display: none;
+    }
+  }
+</style>

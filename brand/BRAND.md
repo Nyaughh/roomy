@@ -104,6 +104,22 @@ In dark mode, the deep tone is the light fill (light text on dark).
 | Hidden system space | stone with a 45° hatch (`viz.hatch`) |
 | Other | stone |
 
+**Storage categories** (the app's home screen and its stacked usage bar):
+
+| Category | Color |
+| --- | --- |
+| Apps (install + data + caches) | lilac |
+| Games | pistachio |
+| Projects | mist |
+| Media | powder |
+| Documents | sand |
+| Downloads | peach |
+| System | slate; hidden or reserved space inside it is stone with the hatch |
+| Caches & temp | blush |
+| Other | stone |
+| Free | sunken with a `line-strong` hairline |
+| Room made (after a clean-up) | butter |
+
 **Treemap folders** cycle in `treemapOrder`: powder, sage, lilac, peach, mist, blush, pistachio, sand,
 mauve, cocoa, slate, stone. Neighbors stay distinguishable. Separate tiles with a 2–3px gap of the
 panel color rather than borders. The selected or freed tile is butter. Hidden or reserved space is always

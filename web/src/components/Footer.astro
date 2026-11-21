@@ -1,26 +1,18 @@
 ---
 import Logo from "./Logo.astro";
-import Icon from "./Icon.astro";
 import { LINKS, SITE } from "../site";
 ---
 
 <footer class="footer">
   <div class="container">
-    <div class="cta card">
-      <div>
-        <h2>Ready to make some room?</h2>
-        <p>Free for Windows and macOS. Scan your drive in moments, clean up with confidence.</p>
-      </div>
-      <div class="cta-btns">
-        <a class="btn btn-primary" href="#download"><Icon name="download" size={18} /> Download Roomy</a>
-        <a class="btn btn-ghost" href={LINKS.github}><Icon name="github" size={18} /> Star on GitHub</a>
-      </div>
+    <div class="closer">
+      <p class="title-1">Make room.</p>
+      <a class="btn btn-primary" href="#download">Download Roomy</a>
     </div>
-
     <div class="bottom">
       <div class="brand">
-        <Logo id="ftr" height={26} />
-        <p>{SITE.tagline} A storage analyzer and cleaner that hides nothing.</p>
+        <Logo height={22} />
+        <p>A storage analyzer and cleaner that hides nothing.</p>
       </div>
       <nav aria-label="Footer">
         <ul>
@@ -31,53 +23,39 @@ import { LINKS, SITE } from "../site";
         </ul>
       </nav>
     </div>
-    <p class="fine">Roomy v{SITE.version} · Free and open source · Made with care for tidy disks.</p>
+    <p class="fine">Roomy {SITE.version} · Free and open source · Works offline</p>
   </div>
 </footer>
 
 <style>
   .footer {
+    border-top: 1px solid var(--line);
     padding-bottom: 2.5rem;
   }
-  .cta {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 2rem;
-    padding: clamp(1.8rem, 4vw, 3rem);
-    border-radius: var(--r-xl);
-    overflow: hidden;
-    background:
-      radial-gradient(80% 140% at 100% 0%, color-mix(in srgb, var(--mint) 14%, transparent), transparent 60%),
-      radial-gradient(80% 140% at 0% 100%, color-mix(in srgb, var(--peri) 18%, transparent), transparent 60%),
-      var(--surface);
-  }
-  .cta h2 {
-    font-size: clamp(1.6rem, 3.2vw, 2.3rem);
-  }
-  .cta p {
-    margin-top: 0.6rem;
-    color: var(--muted);
-  }
-  .cta-btns {
+  .closer {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.7rem;
-    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding-block: clamp(3.5rem, 8vw, 5.5rem);
   }
   .bottom {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 2rem;
-    margin-top: 3.5rem;
+    gap: 1.5rem 2rem;
     padding-top: 2rem;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--line);
+  }
+  .brand {
+    color: var(--ink);
   }
   .brand p {
-    margin-top: 0.8rem;
-    color: var(--muted);
-    font-size: 0.925rem;
+    margin-top: 0.75rem;
+    color: var(--ink-2);
+    font-size: 0.9rem;
   }
   ul {
     display: flex;
@@ -88,25 +66,16 @@ import { LINKS, SITE } from "../site";
     padding: 0;
   }
   nav a {
-    color: var(--muted);
+    color: var(--ink-2);
     text-decoration: none;
-    font-size: 0.925rem;
+    font-size: 0.9rem;
   }
   nav a:hover {
-    color: var(--text);
+    color: var(--ink);
   }
   .fine {
     margin-top: 2rem;
-    color: var(--muted);
-    font-size: 0.825rem;
-    opacity: 0.85;
-  }
-
-  @media (max-width: 760px) {
-    .cta,
-    .bottom {
-      flex-direction: column;
-      align-items: flex-start;
-    }
+    color: var(--ink-3);
+    font-size: 0.82rem;
   }
 </style>

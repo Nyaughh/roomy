@@ -1,140 +1,20 @@
 <!doctype html>
-<!-- Source for public/og.png. Open at 1200x630, screenshot to scripts/og-raw.png, then run scripts/icons.mjs. -->
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Roomy OG card</title>
-    <style>
-      @font-face {
-        font-family: "Inter";
-        src: url("../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2");
-        font-weight: 100 900;
-      }
-      * { box-sizing: border-box; }
-      html, body { margin: 0; }
-      body {
-        width: 1200px;
-        height: 630px;
-        overflow: hidden;
-        font-family: Inter, system-ui, sans-serif;
-        color: #f2f3fa;
-        background:
-          radial-gradient(45% 60% at 18% 20%, rgb(139 147 255 / 0.22), transparent 70%),
-          radial-gradient(40% 55% at 85% 80%, rgb(110 231 197 / 0.14), transparent 70%),
-          #0b0c16;
-        display: grid;
-        grid-template-columns: 520px 1fr;
-        align-items: center;
-        gap: 40px;
-        padding: 0 60px 0 76px;
-      }
-      .logo { display: flex; align-items: center; gap: 16px; }
-      .logo .word { height: 40px; width: auto; margin-top: 8px; }
-      h1 {
-        margin: 46px 0 0;
-        font-size: 112px;
-        line-height: 0.95;
-        letter-spacing: -0.05em;
-        font-weight: 700;
-      }
-      h1 span {
-        background: linear-gradient(135deg, #8b93ff, #6ee7c5);
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
-      }
-      p {
-        margin: 26px 0 0;
-        font-size: 27px;
-        line-height: 1.4;
-        color: #9aa0b8;
-        letter-spacing: -0.01em;
-      }
-      .tm {
-        position: relative;
-        height: 430px;
-        border-radius: 30px;
-        padding: 14px;
-        background: #11131f;
-        border: 1px solid #23273b;
-        box-shadow: 0 40px 90px -30px rgb(0 0 0 / 0.8);
-      }
-      .tm .in { position: relative; height: 100%; }
-      .c { position: absolute; padding: 4px; }
-      .t {
-        height: 100%;
-        border-radius: 16px;
-        padding: 14px 16px;
-        color: #14162b;
-        font-weight: 640;
-        font-size: 16px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        background-image: linear-gradient(160deg, rgb(255 255 255 / 0.28), transparent 55%);
-      }
-      .t small { display: block; font-weight: 500; opacity: 0.7; font-size: 14px; margin-top: 2px; }
-      .freed {
-        height: 100%;
-        border-radius: 16px;
-        border: 3px dashed rgb(110 231 197 / 0.75);
-        background: rgb(110 231 197 / 0.08);
-        display: grid;
-        place-items: center;
-        align-content: center;
-        gap: 4px;
-        color: #6ee7c5;
-        font-weight: 650;
-        font-size: 18px;
-      }
-      .res {
-        height: 100%;
-        border-radius: 16px;
-        background: repeating-linear-gradient(135deg, rgb(154 160 184 / 0.3) 0 4px, transparent 4px 10px), #181b2b;
-        border: 1px solid #23273b;
-      }
-    </style>
-  </head>
-  <body>
-    <div>
-      <div class="logo">
-        <svg width="56" height="56" viewBox="16 16 480 480">
-          <defs>
-            <linearGradient id="bg" x1="40" y1="24" x2="472" y2="488" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#8B93FF"/><stop offset="1" stop-color="#6EE7C5"/></linearGradient>
-            <linearGradient id="sh" x1="256" y1="16" x2="256" y2="300" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity="0.28"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
-          </defs>
-          <rect x="16" y="16" width="480" height="480" rx="124" fill="url(#bg)"/>
-          <rect x="16" y="16" width="480" height="480" rx="124" fill="url(#sh)"/>
-          <rect x="104" y="104" width="148" height="304" rx="40" fill="#14162B"/>
-          <rect x="270" y="104" width="138" height="138" rx="40" fill="#14162B"/>
-          <rect x="279" y="269" width="120" height="130" rx="34" fill="none" stroke="#14162B" stroke-opacity="0.42" stroke-width="18" stroke-dasharray="26 22" stroke-linecap="round"/>
-          <path d="M339 300 C342 324 346 328 370 334 C346 340 342 344 339 368 C336 344 332 340 308 334 C332 328 336 324 339 300 Z" fill="#14162B"/>
-        </svg>
-        <svg class="word" viewBox="405 102 897 254">
-          <g fill="none" stroke="#F2F3FA" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M425 252 V185 A65 65 0 0 1 490 120"/>
-            <circle cx="612" cy="186" r="66"/>
-            <circle cx="804" cy="186" r="66"/>
-            <path d="M922 252 V170 A50 50 0 0 1 1022 170 V252 M1022 170 A50 50 0 0 1 1122 170 V252"/>
-            <path d="M1182 120 V188 A50 50 0 0 0 1282 188 M1282 120 V282 A56 56 0 0 1 1226 338 H1204"/>
-          </g>
-        </svg>
-      </div>
-      <h1>Make <span>room.</span></h1>
-      <p>See every gigabyte on your drive, nothing hidden. Clear space safely. Free for Windows and macOS.</p>
-    </div>
-    <div class="tm">
-      <div class="in">
-        <div class="c" style="left:0;top:0;width:48%;height:38%"><div class="t" style="background-color:#6f78f0">Videos<small>64 GB</small></div></div>
-        <div class="c" style="left:0;top:38%;width:19%;height:62%"><div class="t" style="background-color:#4fc9a8">Code<small>52 GB</small></div></div>
-        <div class="c" style="left:19%;top:38%;width:29%;height:34%"><div class="t" style="background-color:#a7adff">Photos<small>38 GB</small></div></div>
-        <div class="c" style="left:19%;top:72%;width:29%;height:28%"><div class="t" style="background-color:#6ee7c5">Downloads<small>32 GB</small></div></div>
-        <div class="c" style="left:48%;top:0;width:30%;height:62%"><div class="t" style="background-color:#8b93ff">Applications<small>78 GB</small></div></div>
-        <div class="c" style="left:78%;top:0;width:22%;height:62%"><div class="t" style="background-color:#6ee7c5">Games<small>54 GB</small></div></div>
-        <div class="c" style="left:48%;top:62%;width:24%;height:38%"><div class="t" style="background-color:#3b416b;color:#f2f3fa">System<small>36 GB</small></div></div>
-        <div class="c" style="left:72%;top:62%;width:17%;height:38%"><div class="freed"><span style="font-size:26px">✦</span><span>22 GB</span><span style="color:#9aa0b8;font-weight:500;font-size:14px">freed</span></div></div>
-        <div class="c" style="left:89%;top:62%;width:11%;height:38%"><div class="res"></div></div>
-      </div>
-    </div>
-  </body>
-</html>
+<!-- Source for public/og.png: open at 1200x630, screenshot to scripts/og-raw.png, then run scripts/icons.mjs. -->
+<html lang="en"><head><meta charset="utf-8"><title>Roomy OG card</title>
+<link rel="stylesheet" href="../node_modules/@fontsource-variable/instrument-sans/standard.css">
+<style>
+*{box-sizing:border-box}html,body{margin:0}
+body{width:1200px;height:630px;overflow:hidden;font-family:"Instrument Sans Variable",system-ui,sans-serif;background:#F4F2EC;color:#1B1A17;display:grid;grid-template-columns:500px 1fr;gap:56px;align-items:center;padding:0 64px 0 80px}
+.logo{display:block;width:auto}
+h1{margin:56px 0 0;font-size:112px;line-height:.95;letter-spacing:-.045em;font-weight:600}
+p{margin:26px 0 0;font-size:26px;line-height:1.4;color:#5C584F;letter-spacing:-.005em}
+.win{background:#FBFAF6;border:1px solid #DEDAD0;border-radius:18px;padding:26px 26px 14px;box-shadow:0 1px 2px rgba(27,26,23,.06),0 30px 70px -30px rgba(27,26,23,.3)}
+.t{font-size:20px;font-weight:600;letter-spacing:-.02em}
+.u{margin-top:10px;font-size:34px;font-weight:600;letter-spacing:-.03em}.u span{font-size:16px;font-weight:400;color:#5C584F;letter-spacing:0;margin-left:6px}
+.bar{display:flex;gap:2px;height:16px;margin:12px 0 14px;border-radius:5px;overflow:hidden}.bar i{border-radius:3px}.bar .f{flex:1;background:#EAE7DF;box-shadow:0 0 0 1px #C9C3B7 inset}
+.r{display:grid;grid-template-columns:26px 1fr auto;gap:14px;align-items:center;padding:9px 0;border-top:1px solid #DEDAD0;font-size:16px}.r b{display:block;font-weight:600}.r small{display:block;color:#5C584F;font-size:13px}.r i{width:26px;height:26px;border-radius:8px}.r em{font-style:normal;font-weight:560;font-variant-numeric:tabular-nums}
+.made small{display:inline-block;margin-top:3px;background:#F6D374;color:#1B1A17;border-radius:99px;padding:1px 9px;font-weight:600}
+</style></head><body>
+<div><svg class="logo" viewBox="-2 -120.32 765.36 163.32" height="44"><rect x="0.00" y="-118.32" width="60.78" height="134.64" rx="10.29" fill="#1B1A17"/><rect x="73.87" y="-118.32" width="60.78" height="60.78" rx="10.29" fill="#1B1A17"/><rect x="73.87" y="-44.45" width="60.78" height="60.78" rx="10.29" fill="#F6D374"/><path fill="#1B1A17" transform="translate(157.96 0)" d="M38.60 0L13.40 0L13.40-102L38-102L38-83.20Q41.60-92 48.20-97.20L48.20-97.20Q56.80-104 68.80-104L68.80-104Q73-104 74.80-103.20L74.80-103.20L74.80-79.40Q73.80-79.80 72-79.90Q70.20-80 67.60-80L67.60-80Q53-80 45.80-73.60Q38.60-67.20 38.60-53.20L38.60-53.20L38.60 0ZM135.80 2L135.80 2Q119.60 2 107.30-4.80Q95-11.60 88.20-23.70Q81.40-35.80 81.40-51.40L81.40-51.40Q81.40-67 88.20-78.80Q95-90.60 107.30-97.30Q119.60-104 135.80-104L135.80-104Q152.20-104 164.40-97.30Q176.60-90.60 183.40-78.80Q190.20-67 190.20-51.40L190.20-51.40Q190.20-35.80 183.30-23.70Q176.40-11.60 164.20-4.80Q152 2 135.80 2ZM135.80-18.20L135.80-18.20Q143.80-18.20 150.20-22.30Q156.60-26.40 160.20-33.90Q163.80-41.40 163.80-51.60L163.80-51.60Q163.80-66.60 155.90-75.20Q148-83.80 135.80-83.80L135.80-83.80Q123.60-83.80 115.60-75.20Q107.60-66.60 107.60-51.60L107.60-51.60Q107.60-41.40 111.30-33.90Q115-26.40 121.30-22.30Q127.60-18.20 135.80-18.20ZM253.20 2L253.20 2Q237 2 224.70-4.80Q212.40-11.60 205.60-23.70Q198.80-35.80 198.80-51.40L198.80-51.40Q198.80-67 205.60-78.80Q212.40-90.60 224.70-97.30Q237-104 253.20-104L253.20-104Q269.60-104 281.80-97.30Q294-90.60 300.80-78.80Q307.60-67 307.60-51.40L307.60-51.40Q307.60-35.80 300.70-23.70Q293.80-11.60 281.60-4.80Q269.40 2 253.20 2ZM253.20-18.20L253.20-18.20Q261.20-18.20 267.60-22.30Q274-26.40 277.60-33.90Q281.20-41.40 281.20-51.60L281.20-51.60Q281.20-66.60 273.30-75.20Q265.40-83.80 253.20-83.80L253.20-83.80Q241-83.80 233-75.20Q225-66.60 225-51.60L225-51.60Q225-41.40 228.70-33.90Q232.40-26.40 238.70-22.30Q245-18.20 253.20-18.20ZM349.40 0L324.20 0L324.20-102L348.80-102L348.80-83.20Q353.80-91.80 361.80-97.40L361.80-97.40Q371.60-104 384.60-104L384.60-104Q400.20-104 409.20-95.20L409.20-95.20Q414-90.40 416.20-84.20L416.20-84.20Q421-92 429-97.40L429-97.40Q439.20-104 452.60-104L452.60-104Q468.60-104 477.70-94.90Q486.80-85.80 486.80-70.80L486.80-70.80L486.80 0L461.40 0L461.40-65.80Q461.40-74.80 457-79.10Q452.60-83.40 444.40-83.40L444.40-83.40Q437-83.40 431-80Q425-76.60 421.60-70.40Q418.20-64.20 418.20-56L418.20-56L418.20 0L392.80 0L392.80-65.80Q392.80-74.80 388.30-79.10Q383.80-83.40 375.60-83.40L375.60-83.40Q368.40-83.40 362.40-80Q356.40-76.60 352.90-70.40Q349.40-64.20 349.40-56L349.40-56L349.40 0ZM542.40 41L516.80 41L537.60-5.60L498-102L525.40-102L551-34.20L576.60-102L603.40-102L542.40 41Z"/></svg><h1>Make room.</h1><p>Storage, like your phone's, but it shows everything. Free for Windows and Mac.</p></div>
+<div class="win"><div class="t">Storage</div><div class="u">368 GB<span>used of 512 GB</span></div><div class="bar"><i style="flex:84;background:#C8D5E6"></i><i style="flex:78;background:#D8CFE8"></i><i style="flex:54;background:#E0E6BF"></i><i style="flex:52;background:#C6DDDF"></i><i style="flex:36;background:#BFC3C9"></i><i style="flex:14;background:repeating-linear-gradient(135deg,#5C584F33 0 2px,transparent 2px 6px),#D8D3CA"></i><i style="flex:32;background:#F3D6BF"></i><i style="flex:12;background:#E6DAC3"></i><i style="flex:6;background:#D8D3CA"></i><i style="flex:22;background:#F6D374"></i><i class="f" style="flex:122"></i></div><div class="r"><i style="background:#C8D5E6"></i><span><b>Media</b><small>Videos, photos and music</small></span><em>84 GB</em></div><div class="r"><i style="background:#D8CFE8"></i><span><b>Apps</b><small>86 apps, with their data and caches</small></span><em>78 GB</em></div><div class="r"><i style="background:#E0E6BF"></i><span><b>Games</b><small>7 games</small></span><em>54 GB</em></div><div class="r"><i style="background:#C6DDDF"></i><span><b>Projects</b><small>12 code projects</small></span><em>52 GB</em></div><div class="r"><i style="background:#BFC3C9"></i><span><b>System</b><small>Includes 14 GB hidden</small></span><em>50 GB</em></div><div class="r made"><i style="background:#F6D374"></i><span><b>Caches &amp; temp</b><small>22 GB made room</small></span><em>0.4 GB</em></div></div>
+</body></html>

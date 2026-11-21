@@ -1,0 +1,515 @@
+---
+// The four views Roomy ships (Explore, File types, Largest files, Suggestions), as an accessible tab set.
+const tabs = [
+  {
+    id: "explore",
+    name: "Explore",
+    blurb: "A treemap beside a folder list. Big things look big. Click any block to step inside.",
+  },
+  {
+    id: "types",
+    name: "File types",
+    blurb: "Space by kind: video, photos, apps, archives, code and the rest, in one bar.",
+  },
+  {
+    id: "largest",
+    name: "Largest files",
+    blurb: "The biggest single files on the drive, wherever they're buried.",
+  },
+  {
+    id: "suggestions",
+    name: "Suggestions",
+    blurb: "Clutter that's safe to clear, each item explained in plain words.",
+  },
+];
+
+const exploreTiles = [
+  { n: "node_modules", gb: "14.2 GB", x: 0, y: 0, w: 52, h: 58, viz: "mist" },
+  { n: "target", gb: "9.8 GB", x: 52, y: 0, w: 48, h: 40, viz: "pistachio" },
+  { n: ".venv", gb: "4.1 GB", x: 52, y: 40, w: 26, h: 60, viz: "sage" },
+  { n: "assets", gb: "3.6 GB", x: 78, y: 40, w: 22, h: 60, viz: "peach" },
+  { n: "src", gb: "1.9 GB", x: 0, y: 58, w: 28, h: 42, viz: "powder" },
+  { n: "docs", gb: "1.2 GB", x: 28, y: 58, w: 24, h: 42, viz: "sand" },
+];
+const exploreList = [
+  ["node_modules", "14.2 GB"],
+  ["target", "9.8 GB"],
+  [".venv", "4.1 GB"],
+  ["assets", "3.6 GB"],
+  ["src", "1.9 GB"],
+];
+
+const types = [
+  { n: "Video", pct: 31, gb: "121 GB", viz: "powder" },
+  { n: "Apps & code binaries", pct: 18, gb: "70 GB", viz: "lilac" },
+  { n: "Game data", pct: 14, gb: "55 GB", viz: "pistachio" },
+  { n: "Images", pct: 10, gb: "39 GB", viz: "sage" },
+  { n: "System", pct: 6, gb: "23 GB", viz: "slate" },
+  { n: "Archives", pct: 6, gb: "23 GB", viz: "peach" },
+  { n: "Code", pct: 5, gb: "20 GB", viz: "mist" },
+  { n: "Other", pct: 4, gb: "16 GB", viz: "stone" },
+  { n: "Documents", pct: 3, gb: "12 GB", viz: "sand" },
+  { n: "Hidden system space", pct: 3, gb: "14 GB", viz: "stone", hatch: true },
+];
+
+const largest = [
+  { n: "Ubuntu.vhdx", p: "Users › you › VMs", gb: "38.2 GB", viz: "cocoa" },
+  { n: "Holiday 2024.mov", p: "Users › you › Videos", gb: "12.4 GB", viz: "powder" },
+  { n: "pagefile.sys", p: "System", gb: "8.0 GB", viz: "slate" },
+  { n: "game-assets.pak", p: "Games › Northwind", gb: "6.7 GB", viz: "pistachio" },
+  { n: "photos-backup.zip", p: "Users › you › Downloads", gb: "4.9 GB", viz: "peach" },
+];
+
+const sugg = [
+  { n: "App caches", note: "Rebuilt by each app as needed", gb: "9.2 GB", on: true },
+  { n: "Temporary files", note: "Left behind by installers and apps", gb: "6.4 GB", on: true },
+  { n: "npm cache", note: "Packages npm downloaded before", gb: "4.6 GB", on: true },
+  { n: "Crash dumps & error reports", note: "Old diagnostic files", gb: "1.8 GB", on: true },
+  { n: "Recycle Bin", note: "Emptying it is permanent", gb: "3.1 GB", on: false },
+  { n: "Project build folders", note: "Opt-in · you pick the projects", gb: "28.0 GB", on: false },
+  { n: "Duplicate files", note: "Opt-in · copies of 10 MiB or more", gb: "2.3 GB", on: false },
+];
+---
+
+<section id="views" class="section views" aria-labelledby="views-title">
+  <div class="container">
+    <div class="section-head">
+      <p class="kicker">Dig deeper</p>
+      <h2 id="views-title" class="title-1">From a category to the exact file.</h2>
+      <p class="lead">
+        Storage gives you the overview. When you want the details, four more views are a click away. All of them come
+        from one scan by a native scanner that reads your drive on many threads at once.
+      </p>
+    </div>
+
+    <div class="tabset" data-tabset>
+      <div class="tablist" role="tablist" aria-label="Roomy views">
+        {tabs.map((t, i) => (
+          <button
+            class="tab"
+            role="tab"
+            type="button"
+            id={`tab-${t.id}`}
+            aria-controls={`panel-${t.id}`}
+            aria-selected={i === 0 ? "true" : "false"}
+            tabindex={i === 0 ? 0 : -1}
+          >
+            <span class="tab-name">{t.name}</span>
+            <span class="tab-blurb">{t.blurb}</span>
+          </button>
+        ))}
+      </div>
+
+      <div class="panels">
+        <div class="panel" role="tabpanel" id="panel-explore" aria-labelledby="tab-explore" tabindex="0">
+          <div class="frame">
+            <p class="crumb">Users <span>/</span> you <span>/</span> Projects <span>/</span> <b>northwind</b></p>
+            <div class="ex">
+              <div class="tm">
+                {exploreTiles.map((t) => (
+                  <div class="c" style={`left:${t.x}%;top:${t.y}%;width:${t.w}%;height:${t.h}%`}>
+                    <div class="t" style={`--fill:var(--viz-${t.viz})`}>
+                      <span class="tn">{t.n}</span>
+                      <span class="ts num">{t.gb}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <ul class="rows">
+                {exploreList.map(([n, gb]) => (
+                  <li><span>{n}</span><span class="num muted">{gb}</span></li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" role="tabpanel" id="panel-types" aria-labelledby="tab-types" tabindex="0">
+          <div class="frame">
+            <div class="typebar">
+              {types.map((t) => (
+                <span class:list={[{ hatch: t.hatch }]} style={`flex:${t.pct};--fill:var(--viz-${t.viz})`}></span>
+              ))}
+            </div>
+            <ul class="type-rows">
+              {types.map((t) => (
+                <li>
+                  <i class:list={[{ hatch: t.hatch }]} style={`--fill:var(--viz-${t.viz})`}></i>
+                  <span class="tn2">{t.n}</span>
+                  <span class="num muted">{t.gb}</span>
+                  <span class="num pct">{t.pct}%</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <div class="panel" role="tabpanel" id="panel-largest" aria-labelledby="tab-largest" tabindex="0">
+          <div class="frame">
+            <ul class="files">
+              {largest.map((f, i) => (
+                <li>
+                  <span class="rank num">{i + 1}</span>
+                  <span class="fi" style={`--fill:var(--viz-${f.viz})`}></span>
+                  <span class="fn">
+                    <span class="f1">{f.n}</span>
+                    <span class="f2">{f.p}</span>
+                  </span>
+                  <span class="num fs">{f.gb}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <div class="panel" role="tabpanel" id="panel-suggestions" aria-labelledby="tab-suggestions" tabindex="0">
+          <div class="frame">
+            <ul class="sg">
+              {sugg.map((s) => (
+                <li class:list={[{ off: !s.on }]}>
+                  <span class="cb" aria-hidden="true">
+                    {s.on && (
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+                    )}
+                  </span>
+                  <span class="fn">
+                    <span class="f1">{s.n}</span>
+                    <span class="f2">{s.note}</span>
+                  </span>
+                  <span class="num fs">{s.gb}</span>
+                </li>
+              ))}
+            </ul>
+            <div class="sg-foot">
+              <span class="muted">4 selected</span>
+              <span class="btn btn-primary btn-sm fake">Review 22.0 GB</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-tabset]").forEach((set) => {
+    const tabs = [...set.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const panels = tabs.map((t) => document.getElementById(t.getAttribute("aria-controls") ?? ""));
+    const select = (i: number, focus = false) => {
+      tabs.forEach((t, j) => {
+        const on = i === j;
+        t.setAttribute("aria-selected", String(on));
+        t.tabIndex = on ? 0 : -1;
+        panels[j]?.toggleAttribute("hidden", !on);
+      });
+      if (focus) tabs[i]?.focus();
+    };
+    select(0);
+    set.classList.add("js");
+    tabs.forEach((t, i) => {
+      t.addEventListener("click", () => select(i));
+      t.addEventListener("keydown", (e) => {
+        const n = tabs.length;
+        const k = e.key;
+        if (k === "ArrowDown" || k === "ArrowRight") select((i + 1) % n, true);
+        else if (k === "ArrowUp" || k === "ArrowLeft") select((i - 1 + n) % n, true);
+        else if (k === "Home") select(0, true);
+        else if (k === "End") select(n - 1, true);
+        else return;
+        e.preventDefault();
+      });
+    });
+  });
+</script>
+
+<style>
+  .tabset {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr);
+    gap: clamp(2rem, 5vw, 4rem);
+    margin-top: clamp(3rem, 6vw, 4.5rem);
+    align-items: start;
+  }
+  .tablist {
+    display: grid;
+    border-top: 1px solid var(--line);
+  }
+  .tab {
+    display: grid;
+    gap: 0.3rem;
+    padding: 1.2rem 0 1.2rem 1.1rem;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    position: relative;
+  }
+  .tab::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 1.2rem;
+    bottom: 1.2rem;
+    width: 3px;
+    border-radius: 3px;
+    background: transparent;
+    transition: background-color var(--dur-base) var(--ease);
+  }
+  .tab-name {
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    color: var(--ink-3);
+    transition: color var(--dur-base) var(--ease);
+  }
+  .tab-blurb {
+    color: var(--ink-2);
+    font-size: 0.95rem;
+  }
+  .tab:hover .tab-name,
+  .tab[aria-selected="true"] .tab-name {
+    color: var(--ink);
+  }
+  .tab[aria-selected="true"]::before {
+    background: var(--butter);
+  }
+  /* Before JS runs every view is shown; with JS only the active tab's blurb shows. */
+  .tabset.js .tab[aria-selected="false"] .tab-blurb {
+    display: none;
+  }
+
+  .panels {
+    display: grid;
+    gap: 1.5rem;
+  }
+  .panel:focus-visible {
+    border-radius: var(--radius-card);
+  }
+  .frame {
+    padding: clamp(1rem, 2.5vw, 1.5rem);
+    border-radius: var(--radius-card);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    font-size: 0.9rem;
+    min-height: 360px;
+  }
+
+  /* explore */
+  .crumb {
+    color: var(--ink-2);
+    font-size: 0.85rem;
+  }
+  .crumb span {
+    color: var(--line-strong);
+    margin: 0 0.15rem;
+  }
+  .crumb b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .ex {
+    display: grid;
+    grid-template-columns: 1fr 170px;
+    gap: 1rem;
+    margin-top: 0.9rem;
+  }
+  .tm {
+    position: relative;
+    height: 290px;
+    margin: -2px;
+  }
+  .c {
+    position: absolute;
+    padding: 2px;
+  }
+  .t {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 8px 9px;
+    border-radius: var(--radius-tile);
+    background: var(--fill);
+    color: var(--viz-label);
+    overflow: hidden;
+    font-size: 0.8rem;
+  }
+  .tn {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ts {
+    opacity: 0.78;
+  }
+  .rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.82rem;
+  }
+  .rows li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* types */
+  .typebar {
+    display: flex;
+    gap: 3px;
+    height: 40px;
+  }
+  .typebar span {
+    border-radius: 6px;
+    background: var(--fill);
+    min-width: 4px;
+  }
+  .hatch {
+    background:
+      repeating-linear-gradient(135deg, var(--viz-hatch) 0 2px, transparent 2px 6px),
+      var(--fill) !important;
+  }
+  .type-rows {
+    list-style: none;
+    margin: 1rem 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 1.5rem;
+  }
+  .type-rows li {
+    display: grid;
+    grid-template-columns: auto 1fr auto 2.6rem;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.85rem;
+  }
+  .type-rows i {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--fill);
+  }
+  .tn2 {
+    font-weight: 560;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pct {
+    text-align: right;
+    font-weight: 560;
+  }
+
+  /* largest + suggestions rows */
+  .files,
+  .sg {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .files li,
+  .sg li {
+    display: grid;
+    grid-template-columns: auto auto 1fr auto;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.8rem 0.25rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .sg li {
+    grid-template-columns: auto 1fr auto;
+    padding: 0.62rem 0.25rem;
+  }
+  .rank {
+    width: 1.2rem;
+    color: var(--ink-3);
+    font-size: 0.8rem;
+  }
+  .fi {
+    width: 28px;
+    height: 34px;
+    border-radius: 6px 10px 6px 6px;
+    background: var(--fill);
+  }
+  .fn {
+    display: grid;
+    min-width: 0;
+  }
+  .f1 {
+    font-weight: 560;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .f2 {
+    color: var(--ink-2);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fs {
+    font-weight: 560;
+  }
+  .cb {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    background: var(--ink);
+    color: var(--paper);
+  }
+  .off .cb {
+    background: transparent;
+    box-shadow: 0 0 0 1.5px var(--line-strong) inset;
+  }
+  .off .fs {
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+  .sg-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+  }
+  .fake {
+    cursor: default;
+    pointer-events: none;
+  }
+
+  @media (max-width: 900px) {
+    .tabset {
+      grid-template-columns: 1fr;
+    }
+  }
+  @media (max-width: 600px) {
+    .ex {
+      grid-template-columns: 1fr;
+    }
+    .rows {
+      display: none;
+    }
+    .tm {
+      height: 240px;
+    }
+    .type-rows {
+      grid-template-columns: 1fr;
+    }
+    .frame {
+      min-height: 0;
+    }
+  }
+</style>

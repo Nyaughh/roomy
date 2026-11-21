@@ -1,0 +1,126 @@
+---
+// Developer clutter Roomy recognizes (from the app's suggestion list). "Ticked" = pre-selected.
+const rows = [
+  { n: "npm cache", os: "Windows", d: "Ticked" },
+  { n: "pnpm metadata cache", os: "Windows", d: "Ticked" },
+  { n: "Yarn cache", os: "Windows", d: "Ticked" },
+  { n: "pip cache", os: "Windows", d: "Ticked" },
+  { n: "pnpm store", os: "Windows", d: "Listed" },
+  { n: "Cargo registry cache", os: "Windows", d: "Listed" },
+  { n: "Gradle caches", os: "Windows", d: "Listed" },
+  { n: "Xcode DerivedData", os: "Mac", d: "Ticked" },
+  { n: "iOS device support files", os: "Mac", d: "Listed" },
+  { n: "Project build folders", os: "Both", d: "Opt-in" },
+];
+---
+
+<section class="section dev" aria-labelledby="dev-title">
+  <div class="container cols">
+    <div class="section-head">
+      <p class="kicker">For developers</p>
+      <h2 id="dev-title" class="title-1">The gigabytes your tools forget.</h2>
+      <p class="lead">
+        Package caches pile up quietly. Roomy knows where they live. Project build folders like node_modules, Rust
+        target folders and virtual environments are listed per project with the date each project last changed, and you
+        pick which ones go.
+      </p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <caption class="sr-only">Developer caches and folders Roomy recognizes</caption>
+        <thead>
+          <tr><th scope="col">What</th><th scope="col">Platform</th><th scope="col">By default</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr>
+              <th scope="row"><code>{r.n}</code></th>
+              <td>{r.os}</td>
+              <td><span class:list={["st", r.d.toLowerCase().replace("-", "")]}>{r.d}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p class="foot">Ticked items are pre-selected; your tools fetch or rebuild them when needed. Listed items wait for you to tick them.</p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(2rem, 6vw, 5rem);
+    align-items: start;
+  }
+  .table-wrap {
+    border-radius: var(--radius-card);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 0.5rem 1.25rem 1.1rem;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 0.7rem 0.25rem;
+    border-bottom: 1px solid var(--line);
+    font-weight: 400;
+  }
+  thead th {
+    color: var(--ink-3);
+    font-size: 0.8rem;
+    font-weight: 560;
+  }
+  tbody th code {
+    font-size: 0.85rem;
+    color: var(--ink);
+  }
+  td {
+    color: var(--ink-2);
+  }
+  .st {
+    display: inline-block;
+    padding: 0.05rem 0.55rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.78rem;
+    font-weight: 560;
+    white-space: nowrap;
+  }
+  .ticked {
+    background: var(--positive-wash);
+    color: var(--positive);
+  }
+  .listed {
+    background: var(--sunken);
+    color: var(--ink-2);
+  }
+  .optin {
+    background: var(--butter-wash);
+    color: var(--butter-deep);
+  }
+  .foot {
+    margin-top: 0.9rem;
+    color: var(--ink-3);
+    font-size: 0.82rem;
+  }
+
+  @media (max-width: 900px) {
+    .cols {
+      grid-template-columns: 1fr;
+    }
+  }
+  @media (max-width: 420px) {
+    .table-wrap {
+      padding-inline: 0.75rem;
+    }
+    th,
+    td {
+      padding-inline: 0.15rem;
+    }
+  }
+</style>
