@@ -90,6 +90,10 @@ pub struct Entity {
     pub cache_dirs: Vec<u32>,
     #[serde(skip)]
     pub junk_dirs: Vec<u32>,
+    /// Bytes clearing the cache folders would really free (hard links aware).
+    pub reclaim_cache: u64,
+    /// Bytes removing build output/deps would really free (hard links aware).
+    pub reclaim_build: u64,
     pub uninstall: Option<Uninstall>,
     pub mtime: i64,
 }
@@ -108,13 +112,15 @@ impl Entity {
             locations: Vec::new(),
             cache_dirs: Vec::new(),
             junk_dirs: Vec::new(),
+            reclaim_cache: 0,
+            reclaim_build: 0,
             uninstall: None,
             mtime: 0,
         }
     }
 
     pub fn reclaimable(&self) -> u64 {
-        self.buckets[B_CACHE as usize] + self.buckets[B_BUILD as usize]
+        self.reclaim_cache + self.reclaim_build
     }
 }
 
@@ -214,9 +220,11 @@ pub struct Storage {
     pub generation: u64,
 }
 
+/// Folder names that are regenerable caches when found inside an app's
+/// *data* folders (Chromium/Electron/Firefox/Steam conventions). These are
+/// the only places "Clear cache" may delete; install folders never qualify.
 const CACHE_DIR_NAMES: &[&str] = &[
     "cache",
-    "caches",
     "code cache",
     "gpucache",
     "cache2",
@@ -227,16 +235,7 @@ const CACHE_DIR_NAMES: &[&str] = &[
     "dawnwebgpucache",
     "cacheddata",
     "cachedextensionvsixs",
-    "cachestorage",
     "htmlcache",
-    "webcache",
-    "inetcache",
-    "temp",
-    "tmp",
-    "crashpad",
-    "crashes",
-    "crash reports",
-    "logs",
 ];
 
 const PROJECT_MARKERS: &[&str] = &[
@@ -293,8 +292,6 @@ const JUNK_DIRS: &[(&str, &[&str])] = &[
     ("obj", &["*.csproj", "*.fsproj", "*.vbproj"]),
     ("intermediate", &["*.uproject"]),
     ("deriveddatacache", &["*.uproject"]),
-    ("binaries", &["*.uproject"]),
-    ("saved", &["*.uproject"]),
     (".godot", &["project.godot"]),
 ];
 
@@ -328,6 +325,25 @@ const NOT_PROJECT_DIRS: &[&str] = &[
     ".vscode-server",
 ];
 
+/// True if `inner` is strictly inside `outer` (case-insensitive on Windows).
+fn path_contains(outer: &Path, inner: &Path) -> bool {
+    let norm = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| {
+                let s = c.as_os_str().to_string_lossy().replace('/', "\\");
+                if cfg!(windows) {
+                    s.to_lowercase()
+                } else {
+                    s
+                }
+            })
+            .filter(|s| !s.is_empty() && s != "\\")
+            .collect()
+    };
+    let (o, i) = (norm(outer), norm(inner));
+    !o.is_empty() && i.len() > o.len() && i[..o.len()] == o[..]
+}
+
 fn lower(s: &str) -> String {
     s.to_lowercase()
 }
@@ -345,6 +361,9 @@ struct Builder<'a> {
     tree: &'a Tree,
     entities: Vec<Entity>,
     claims: HashMap<u32, (u32, u8, u32)>, // node -> (entity, bucket, location index)
+    /// The most specific claim that contains the scanned folder itself
+    /// (scanning a folder inside Downloads, an app, a project …).
+    root_claim: Option<(usize, u32, u8)>,
 }
 
 impl<'a> Builder<'a> {
@@ -385,8 +404,24 @@ impl<'a> Builder<'a> {
 
     fn claim(&mut self, p: &Path, entity: u32, bucket: u8) -> bool {
         match self.node(p) {
-            Some(n) if n != 0 || self.tree.nodes.len() == 1 => self.claim_node(n, entity, bucket),
-            _ => false,
+            Some(0) => {
+                self.offer_root(p.components().count(), entity, bucket);
+                false
+            }
+            Some(n) => self.claim_node(n, entity, bucket),
+            None => {
+                if path_contains(p, Path::new(&self.tree.root_path)) {
+                    self.offer_root(p.components().count(), entity, bucket);
+                }
+                false
+            }
+        }
+    }
+
+    /// Offer a claim on the scanned folder itself; the deepest offer wins.
+    fn offer_root(&mut self, depth: usize, entity: u32, bucket: u8) {
+        if self.root_claim.map(|(d, _, _)| depth > d).unwrap_or(true) {
+            self.root_claim = Some((depth, entity, bucket));
         }
     }
 
@@ -523,9 +558,13 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
         tree,
         entities: Vec::new(),
         claims: HashMap::new(),
+        root_claim: None,
     };
 
     // --- System (claimed first so nothing else can take these) ----------
+    let bin = b.entity(Category::Caches, EntityKind::Cache, "Recycle Bin");
+    b.entities[bin as usize].detail =
+        Some("Files you deleted. They still use space until the bin is emptied.".into());
     for c in tree.children(0) {
         let k = tree.nodes[c as usize].kind;
         if k == KIND_GAP {
@@ -538,7 +577,9 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
                 Some("Space the system reports as used that no folder listing shows".into());
             b.claim_node(c, e, B_FILES);
             for part in tree.children(c) {
-                if tree.name(part).starts_with("NTFS") {
+                if tree.name(part).starts_with("Recycle Bin") {
+                    b.claim_node(part, bin, B_FILES);
+                } else if tree.name(part).starts_with("NTFS") {
                     let m = b.entity(
                         Category::System,
                         EntityKind::Hidden,
@@ -612,9 +653,6 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
         ] {
             b.claim(&drive.join(d), rec, B_FILES);
         }
-        let bin = b.entity(Category::Caches, EntityKind::Cache, "Recycle Bin");
-        b.entities[bin as usize].detail =
-            Some("Files you deleted. They still use space until the bin is emptied.".into());
         b.claim(&drive.join("$Recycle.Bin"), bin, B_FILES);
     }
     let shared = b.entity(
@@ -694,7 +732,14 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
             b.claim(d, e, B_DATA);
         }
         for d in &app.cache_dirs {
-            b.claim(d, e, B_CACHE);
+            if !valid_catalog_cache(d) {
+                continue;
+            }
+            if let Some(n) = b.node(d) {
+                if b.claim_node(n, e, B_CACHE) {
+                    b.entities[e as usize].cache_dirs.push(n);
+                }
+            }
         }
         if app.kind != AppKind::System {
             app_entities.push(e);
@@ -824,6 +869,44 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
         }
     }
     find_projects(&b, 0, &mut project_roots, &not_roots);
+    if !not_roots.contains(&0) && !b.claims.contains_key(&0) {
+        let root_path = PathBuf::from(&tree.root_path);
+        let (proj_name, proj_path) = if has_marker(tree, 0) {
+            (Some(tree.name(0).to_string()), Some(root_path.clone()))
+        } else {
+            let stop: Vec<PathBuf> = [
+                &env.home,
+                &env.documents,
+                &env.downloads,
+                &env.desktop,
+                &env.onedrive,
+            ]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .chain(env.app_data_roots.iter().cloned())
+            .chain(env.program_files.iter().cloned())
+            .collect();
+            match enclosing_project(&root_path, &stop) {
+                Some(p) => (
+                    p.file_name().map(|n| n.to_string_lossy().into_owned()),
+                    Some(p),
+                ),
+                None => (None, None),
+            }
+        };
+        if let (Some(name), Some(pp)) = (proj_name, proj_path) {
+            let name = Path::new(&name)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or(name);
+            let e = b.entity(Category::Projects, EntityKind::Project, name);
+            b.entities[e as usize].detail = Some(project_kinds(tree, 0));
+            b.entities[e as usize].mtime = tree.nodes[0].mtime;
+            // Deeper than any known folder that might also contain the root.
+            b.offer_root(pp.components().count() + 1000, e, B_FILES);
+        }
+    }
     for p in project_roots {
         let name = tree.name(p).to_string();
         let e = b.entity(Category::Projects, EntityKind::Project, name);
@@ -837,6 +920,10 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
             let e = b.entity(cat, EntityKind::Folder, name);
             b.claim(p, e, B_FILES);
         }
+    }
+
+    if let Some((_, e, bk)) = b.root_claim {
+        b.claim_node(0, e, bk);
     }
 
     // --- Walk once and attribute every node ------------------------------
@@ -935,6 +1022,73 @@ fn cache_locations(env: &Env) -> Vec<(&'static str, Vec<PathBuf>)> {
     v
 }
 
+/// Catalog cache folders Roomy may clear: only Steam's per-game shader
+/// cache, `<library>/steamapps/shadercache/<numeric appid>`.
+fn valid_catalog_cache(p: &Path) -> bool {
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parent = p
+        .parent()
+        .and_then(|x| x.file_name())
+        .map(|n| n.to_string_lossy().to_lowercase());
+    let grand = p
+        .parent()
+        .and_then(|x| x.parent())
+        .and_then(|x| x.file_name())
+        .map(|n| n.to_string_lossy().to_lowercase());
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_digit())
+        && parent.as_deref() == Some("shadercache")
+        && grand.as_deref() == Some("steamapps")
+}
+
+fn has_marker(tree: &Tree, node: u32) -> bool {
+    tree.children(node).any(|k| {
+        PROJECT_MARKERS
+            .iter()
+            .any(|m| matches_marker(m, tree.name(k)))
+    })
+}
+
+/// The nearest folder at or above the scanned folder that is a project root,
+/// looked up on disk (stops at the home folder and other well-known places).
+fn enclosing_project(root: &Path, stop: &[PathBuf]) -> Option<PathBuf> {
+    let same = |a: &Path, b: &Path| {
+        let k = |p: &Path| {
+            p.to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .to_lowercase()
+        };
+        if cfg!(windows) {
+            k(a) == k(b)
+        } else {
+            a == b
+        }
+    };
+    for (depth, dir) in root.ancestors().skip(1).enumerate() {
+        if depth > 12
+            || dir.parent().is_none()
+            || stop.iter().any(|s| same(s, dir) || path_contains(dir, s))
+        {
+            return None;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return None;
+        };
+        let marked = rd.flatten().any(|e| {
+            PROJECT_MARKERS
+                .iter()
+                .any(|m| matches_marker(m, &e.file_name().to_string_lossy()))
+        });
+        if marked {
+            return Some(dir.to_path_buf());
+        }
+    }
+    None
+}
+
 fn find_projects(b: &Builder, node: u32, out: &mut Vec<u32>, not_roots: &HashSet<u32>) {
     let tree = b.tree;
     let mut stack = vec![node];
@@ -1027,6 +1181,18 @@ fn attribute_walk(b: &mut Builder, env: &Env, is_volume: bool) -> Storage {
     let mut typed: HashMap<&'static str, u32> = HashMap::new();
     let mut typed_dirs: HashMap<(u32, u32), u64> = HashMap::new(); // (entity, parent dir) -> bytes
     let mut seen_cache_dir: HashSet<u32> = HashSet::new();
+    // Hard links: a file's data is only freed when every one of its names
+    // goes. Count, per identity, how many live names exist in total.
+    let mut link_groups: HashMap<u64, (u32, u64)> = HashMap::new();
+    for (&node, &key) in &tree.link_keys {
+        let nd = &tree.nodes[node as usize];
+        if !nd.is_deleted() {
+            let g = link_groups.entry(key).or_default();
+            g.0 += 1;
+            g.1 = g.1.max(nd.size);
+        }
+    }
+    let mut inside: HashMap<(u32, u8, u64), u32> = HashMap::new();
 
     // (node, owner, bucket, in_project)
     let mut stack: Vec<(u32, Owner, u8)> = vec![(0, Owner::None, B_FILES)];
@@ -1048,11 +1214,13 @@ fn attribute_walk(b: &mut Builder, env: &Env, is_volume: bool) -> Storage {
             }
         }
         if node.kind == KIND_DIR {
-            if let Owner::Entity(e, _) = owner {
+            if let Owner::Entity(e, loc) = owner {
                 let ent_kind = b.entities[e as usize].kind;
                 let name = lower(tree.name(n));
+                let in_data = b.entities[e as usize].locations[loc as usize].bucket == B_DATA;
                 if matches!(ent_kind, EntityKind::App | EntityKind::Game)
-                    && bucket != B_CACHE
+                    && in_data
+                    && bucket == B_DATA
                     && !b.claims.contains_key(&n)
                     && CACHE_DIR_NAMES.contains(&name.as_str())
                 {
@@ -1180,6 +1348,25 @@ fn attribute_walk(b: &mut Builder, env: &Env, is_volume: bool) -> Storage {
         if is_file {
             ent.files += 1;
         }
+        if matches!(owner, Owner::Entity(..)) && (bucket == B_CACHE || bucket == B_BUILD) {
+            match tree.link_keys.get(&n) {
+                Some(&k) => *inside.entry((target, bucket, k)).or_default() += 1,
+                None if bucket == B_CACHE => ent.reclaim_cache += size,
+                None => ent.reclaim_build += size,
+            }
+        }
+    }
+    for ((e, bucket, k), count) in inside {
+        if let Some(&(total, size)) = link_groups.get(&k) {
+            if count == total {
+                let ent = &mut b.entities[e as usize];
+                if bucket == B_CACHE {
+                    ent.reclaim_cache += size;
+                } else {
+                    ent.reclaim_build += size;
+                }
+            }
+        }
     }
 
     // Typed entities: their locations are the folders holding most of them.
@@ -1273,6 +1460,7 @@ mod tests {
             mtime: 0,
             kind: KIND_FILE,
             flags: 0,
+            key: 0,
         }
     }
 
@@ -1378,6 +1566,7 @@ mod tests {
             mtime: 0,
             kind: KIND_GAP_PART,
             flags: 0,
+            key: 0,
         });
         gap.finish();
         gap.total_files = 0;
@@ -1529,5 +1718,151 @@ mod tests {
             tree.nodes[0].size
         );
         assert_eq!(by_name(&s, "Downloads").size, 400);
+    }
+
+    #[test]
+    fn folder_scans_are_attributed_to_their_enclosing_location() {
+        let (_, cat, env) = fixture();
+        // Scanning a folder inside Downloads: all of it is Downloads.
+        let sub = d("sub", vec![f("a.zip", 10), f("b.mp4", 20)], vec![]);
+        let root = env.downloads.clone().unwrap().join("sub");
+        let tree = Tree::from_raw(sub, root.to_string_lossy().into_owned());
+        let s = attribute(&tree, &cat, &env, false);
+        assert_eq!(by_name(&s, "Downloads").size, 30);
+        assert_eq!(s.entities.iter().map(|e| e.size).sum::<u64>(), 30);
+
+        // Scanning a project folder directly: the root is the project.
+        let proj = d(
+            "game",
+            vec![f("Cargo.toml", 1)],
+            vec![
+                d("target", vec![f("big.rlib", 500)], vec![]),
+                d("src", vec![f("main.rs", 9)], vec![]),
+            ],
+        );
+        let root = env.documents.clone().unwrap().join("game");
+        let tree = Tree::from_raw(proj, root.to_string_lossy().into_owned());
+        let s = attribute(&tree, &cat, &env, false);
+        let p = by_name(&s, "game");
+        assert_eq!((p.category, p.size), (Category::Projects, 510));
+        assert_eq!(p.reclaim_build, 500);
+    }
+
+    #[test]
+    fn only_regenerable_folders_can_be_cleaned() {
+        let (_, cat, env) = fixture();
+        let r = root();
+        // Unreal: Saved (autosaves, save games) is never build output.
+        let ue = d(
+            "Shooter",
+            vec![f("Shooter.uproject", 1)],
+            vec![
+                d("Saved", vec![f("autosave.umap", 70)], vec![]),
+                d("Intermediate", vec![f("x.obj", 30)], vec![]),
+            ],
+        );
+        // An app install folder with folders named like caches.
+        let app = d(
+            "Acme Paint",
+            vec![f("paint.exe", 10)],
+            vec![
+                d("Cache", vec![f("bundled.dat", 40)], vec![]),
+                d("Logs", vec![f("l.txt", 3)], vec![]),
+            ],
+        );
+        let pf = d("Program Files", vec![], vec![app]);
+        let docs = d("Documents", vec![], vec![ue]);
+        let home = d("ann", vec![], vec![docs]);
+        let users = d("Users", vec![], vec![home]);
+        let mut drive = d("C", vec![], vec![users, pf]);
+        drive.finish();
+        let tree = Tree::from_raw(drive, r.to_string_lossy().into_owned());
+        let s = attribute(&tree, &cat, &env, true);
+        let shooter = by_name(&s, "Shooter");
+        assert_eq!(
+            shooter.reclaim_build, 30,
+            "only Intermediate is rebuildable"
+        );
+        assert_eq!(shooter.junk_dirs.len(), 1);
+        let paint = by_name(&s, "Acme Paint 2.1 (x64)");
+        assert!(
+            paint.cache_dirs.is_empty(),
+            "install folders are never cleared"
+        );
+        assert_eq!(paint.buckets[B_CACHE as usize], 0);
+        assert_eq!(paint.reclaim_cache, 0);
+    }
+
+    #[test]
+    fn steam_shader_cache_is_clearable_and_validated() {
+        let r = root();
+        let lib = d(
+            "steamapps",
+            vec![],
+            vec![
+                d(
+                    "common",
+                    vec![],
+                    vec![d("Dota", vec![f("game.vpk", 900)], vec![])],
+                ),
+                d(
+                    "shadercache",
+                    vec![],
+                    vec![
+                        d("570", vec![f("s.bin", 60)], vec![]),
+                        d("evil", vec![f("e", 5)], vec![]),
+                    ],
+                ),
+            ],
+        );
+        let mut drive = d("C", vec![], vec![d("Steam", vec![], vec![lib])]);
+        drive.finish();
+        let tree = Tree::from_raw(drive, r.to_string_lossy().into_owned());
+        let sa = r.join("Steam").join("steamapps");
+        let mut game = AppRecord::new("Dota 2", AppKind::Game, "Steam");
+        game.install_dirs.push(sa.join("common").join("Dota"));
+        game.cache_dirs.push(sa.join("shadercache").join("570"));
+        game.cache_dirs.push(sa.join("shadercache").join("evil"));
+        let s = attribute(&tree, &Catalog { apps: vec![game] }, &Env::default(), true);
+        let g = by_name(&s, "Dota 2");
+        assert_eq!(g.cache_dirs.len(), 1, "only the numeric app id folder");
+        assert_eq!(g.reclaim_cache, 60);
+        assert_eq!(
+            s.entities.iter().map(|e| e.size).sum::<u64>(),
+            tree.nodes[0].size
+        );
+    }
+
+    #[test]
+    fn reclaimable_build_respects_hard_links_outside_the_project() {
+        let r = root();
+        let mut nm_file = f("dep.js", 100);
+        nm_file.key = 9;
+        let mut store_file = f("dep.js", 0);
+        store_file.key = 9;
+        store_file.flags = FLAG_HARDLINK;
+        let proj = d(
+            "app",
+            vec![f("package.json", 1)],
+            vec![d("node_modules", vec![nm_file, f("own.js", 7)], vec![])],
+        );
+        let store = d("store", vec![store_file], vec![]);
+        let mut drive = d("C", vec![], vec![proj, store]);
+        drive.finish();
+        let tree = Tree::from_raw_with_links(
+            drive,
+            r.to_string_lossy().into_owned(),
+            [9u64].into_iter().collect(),
+        );
+        let s = attribute(&tree, &Catalog::default(), &Env::default(), false);
+        let p = by_name(&s, "app");
+        assert_eq!(
+            p.buckets[B_BUILD as usize], 107,
+            "attribution: the counted name is inside"
+        );
+        assert_eq!(
+            p.reclaim_build, 7,
+            "deleting node_modules frees only what has no other name"
+        );
     }
 }

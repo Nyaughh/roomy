@@ -30,8 +30,9 @@ pub enum Uninstall {
     Launcher { name: String, url: Option<String> },
     /// Windows Settings ▸ Apps.
     Settings,
-    /// macOS: move the .app bundle to the Trash (the standard way).
-    TrashBundle { path: String },
+    /// Show the app in Finder/Explorer so the user can remove it themselves
+    /// (or run the vendor's own uninstaller). Roomy doesn't delete it.
+    Reveal { path: String },
 }
 
 #[derive(Debug, Clone)]
@@ -275,8 +276,15 @@ pub fn steam_games(steam_root: &Path) -> Vec<AppRecord> {
             else {
                 continue;
             };
-            // Steamworks redistributables aren't games.
-            if appid == "228980" {
+            // Steamworks redistributables aren't games. Ignore anything that
+            // isn't a plain numeric app id or a single folder name.
+            let plain_dir =
+                !dir.is_empty() && dir != "." && dir != ".." && !dir.contains(['/', '\\', ':']);
+            if appid == "228980"
+                || appid.is_empty()
+                || !appid.chars().all(|c| c.is_ascii_digit())
+                || !plain_dir
+            {
                 continue;
             }
             let mut r = AppRecord::new(name, AppKind::Game, "Steam");
@@ -891,7 +899,7 @@ mod mac {
                     .unwrap_or_default();
                 let mut r = AppRecord::new(name, AppKind::App, "Applications");
                 r.install_dirs.push(p.clone());
-                r.uninstall = Some(Uninstall::TrashBundle {
+                r.uninstall = Some(Uninstall::Reveal {
                     path: p.to_string_lossy().into_owned(),
                 });
                 out.push(r);
@@ -956,6 +964,17 @@ mod tests {
         std::fs::write(
             lib2.join("steamapps/appmanifest_570.acf"),
             "\"AppState\"\n{\n\t\"appid\"\t\t\"570\"\n\t\"name\"\t\t\"Dota 2\"\n\t\"installdir\"\t\t\"dota 2 beta\"\n}\n",
+        )
+        .unwrap();
+        // Manifests with a non-numeric id or a path-like install dir are ignored.
+        std::fs::write(
+            lib2.join("steamapps/appmanifest_1.acf"),
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"../../x\"\n\t\"name\"\t\t\"Bad\"\n\t\"installdir\"\t\t\"y\"\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            lib2.join("steamapps/appmanifest_2.acf"),
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"2\"\n\t\"name\"\t\t\"Bad2\"\n\t\"installdir\"\t\t\"..\"\n}\n",
         )
         .unwrap();
         let games = steam_games(&steam);

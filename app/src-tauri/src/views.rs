@@ -362,6 +362,7 @@ mod tests {
             mtime: 0,
             kind: KIND_FILE,
             flags: 0,
+            key: 0,
         }
     }
 

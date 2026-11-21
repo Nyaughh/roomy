@@ -12,6 +12,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
+const UNVERIFIED: &str = "Roomy couldn't confirm where this is on disk, so it left it alone.";
+
 #[derive(Debug, Clone, Default)]
 pub struct Guard {
     protected: Vec<PathBuf>,
@@ -59,8 +61,67 @@ fn key(p: &Path) -> Vec<String> {
         for c in &mut out {
             *c = c.to_lowercase();
         }
+    } else if out.len() >= 4 && out[1] == "System" && out[2] == "Volumes" && out[3] == "Data" {
+        // macOS: the writable data volume is firmlinked into "/", so
+        // /System/Volumes/Data/Users/... is the same place as /Users/...
+        out.drain(1..4);
     }
     out
+}
+
+/// True for files that must never be deleted wherever they are
+/// (registry hives, page/hibernation files).
+pub fn is_protected_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    PROTECTED_NAMES
+        .iter()
+        .any(|p| lower == *p || (lower.starts_with(p) && p.ends_with(".dat")))
+}
+
+/// Links that are part of the operating system's own layout (macOS /var and
+/// /tmp, or a link on the way to the user's home or temp folder). Paths
+/// through these are fine; any other link in a path is not.
+fn os_link_aliases() -> &'static Vec<Vec<String>> {
+    static ALIASES: std::sync::OnceLock<Vec<Vec<String>>> = std::sync::OnceLock::new();
+    ALIASES.get_or_init(|| {
+        let mut v: Vec<Vec<String>> = Vec::new();
+        if cfg!(target_os = "macos") {
+            for p in ["/var", "/tmp", "/etc"] {
+                v.push(key(Path::new(p)));
+            }
+        }
+        for base in [dirs::home_dir(), Some(std::env::temp_dir())]
+            .into_iter()
+            .flatten()
+        {
+            for a in base.ancestors() {
+                if std::fs::symlink_metadata(a)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)
+                {
+                    v.push(key(a));
+                }
+            }
+        }
+        v
+    })
+}
+
+/// The first folder above `path` that is a symlink or junction (other than
+/// the OS's own aliases), if any.
+pub fn linked_ancestor(path: &Path) -> Option<PathBuf> {
+    for a in path.ancestors().skip(1) {
+        if a.parent().is_none() || a.as_os_str().is_empty() {
+            break;
+        }
+        let is_link = std::fs::symlink_metadata(a)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_link && !os_link_aliases().contains(&key(a)) {
+            return Some(a.to_path_buf());
+        }
+    }
+    None
 }
 
 fn starts_with(path: &[String], prefix: &[String]) -> bool {
@@ -87,6 +148,12 @@ impl Guard {
             protected.push(h.clone());
             if let Some(parent) = h.parent() {
                 protected.push(parent.to_path_buf()); // C:\Users or /Users or /home
+                                                      // Every account's profile, not just this one.
+                if let Ok(rd) = std::fs::read_dir(parent) {
+                    for e in rd.flatten() {
+                        protected.push(e.path());
+                    }
+                }
             }
         }
         for d in [
@@ -251,20 +318,29 @@ impl Guard {
     /// Ok if `path` may be deleted, otherwise a plain-language reason.
     pub fn check(&self, path: &Path) -> Result<(), String> {
         self.check_lexical(path)?;
-        // Also check where the path really points, in case a parent folder is
-        // a junction/symlink into a protected location.
-        if let Ok(real) = std::fs::canonicalize(path) {
-            if let Ok(md) = std::fs::symlink_metadata(path) {
-                if md.file_type().is_symlink() {
-                    // Deleting a link removes only the link; check its parent.
-                    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
-                        if let Ok(rp) = std::fs::canonicalize(parent) {
-                            return self.check_lexical(&rp.join(name));
-                        }
-                    }
-                    return Ok(());
-                }
-            }
+        let md = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            // Nothing there: nothing will be deleted.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err(UNVERIFIED.into()),
+        };
+        // Only delete things at their real location: a link anywhere above
+        // the target could point outside what the user reviewed.
+        if let Some(link) = linked_ancestor(path) {
+            return Err(format!(
+                "This is reached through a link ({}). Roomy only deletes things at their real location.",
+                link.display()
+            ));
+        }
+        // Check where the path really is. If that can't be confirmed, refuse.
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(UNVERIFIED.into());
+        };
+        let real_parent = std::fs::canonicalize(parent).map_err(|_| UNVERIFIED.to_string())?;
+        self.check_lexical(&real_parent.join(name))?;
+        if !md.file_type().is_symlink() {
+            // (Deleting a link removes only the link, so its target doesn't matter.)
+            let real = std::fs::canonicalize(path).map_err(|_| UNVERIFIED.to_string())?;
             self.check_lexical(&real)?;
         }
         Ok(())
@@ -281,11 +357,7 @@ impl Guard {
             return Err("That's the top of a drive. Roomy never deletes a whole drive.".into());
         }
         if let Some(name) = k.last() {
-            let lower = name.to_lowercase();
-            if PROTECTED_NAMES
-                .iter()
-                .any(|p| lower == *p || (lower.starts_with(p) && p.ends_with(".dat")))
-            {
+            if is_protected_name(name) {
                 return Err(format!(
                     "“{name}” is a system file that Windows or your account needs."
                 ));
@@ -459,5 +531,43 @@ mod tests {
         assert!(g
             .check(&home.join("some-file-that-does-not-exist.txt"))
             .is_ok());
+    }
+
+    #[test]
+    fn every_profile_on_the_machine_is_protected() {
+        let g = Guard::system();
+        let home = dirs::home_dir().unwrap();
+        let users = home.parent().unwrap();
+        for e in std::fs::read_dir(users).unwrap().flatten() {
+            let p = e.path();
+            assert!(
+                g.check_lexical(&p).is_err(),
+                "{} should be protected",
+                p.display()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_data_volume_paths_are_normalised() {
+        let g = Guard::new(
+            vec![PathBuf::from("/"), PathBuf::from("/Users/ann")],
+            vec![PathBuf::from("/System"), PathBuf::from("/private")],
+            vec![],
+        );
+        assert!(g
+            .check_lexical(Path::new("/System/Volumes/Data/Users/ann/Downloads/x.zip"))
+            .is_ok());
+        assert!(g
+            .check_lexical(Path::new("/System/Volumes/Data/Users/ann"))
+            .is_err());
+        assert!(g
+            .check_lexical(Path::new("/System/Volumes/Data/private/var/x"))
+            .is_err());
+        assert!(g.check_lexical(Path::new("/System/Volumes/Data")).is_err());
+        assert!(g
+            .check_lexical(Path::new("/System/Volumes/Preboot/x"))
+            .is_err());
     }
 }

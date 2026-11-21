@@ -312,21 +312,23 @@ function EntityDialog({
           ? d.uninstall.name
           : d.uninstall?.type === "settings"
             ? "Settings ▸ Apps"
-            : d.uninstall?.type === "trashBundle"
-              ? "the Trash"
+            : d.uninstall?.type === "reveal"
+              ? navigator.userAgent.includes("Mac")
+                ? "the Finder, so you can remove it yourself"
+                : "the folder, so you can remove it yourself"
               : "";
 
   if (confirm) {
     const isUninstall = confirm === "uninstall";
-    const paths = confirm === "clearCache" ? d.cachePaths.map((p) => [p, 0] as [string, number]) : d.buildPaths;
+    const paths = confirm === "clearCache" ? d.cachePaths : d.buildPaths;
     return (
       <Dialog
         title={
           isUninstall
             ? `Uninstall ${e.name}?`
             : confirm === "clearCache"
-              ? `Clear ${bytes(e.buckets[2])} of cache?`
-              : `Remove ${bytes(e.buckets[3])} of build output and dependencies?`
+              ? `Clear ${bytes(e.clearable)} of cache?`
+              : `Remove ${bytes(e.cleanable)} of build output and dependencies?`
         }
         description={
           isUninstall
@@ -343,7 +345,13 @@ function EntityDialog({
             </button>
             <button className={`btn ${isUninstall ? "primary" : "danger"}`} onClick={() => run(confirm)} disabled={busy}>
               {busy && <span className="spinner" />}
-              {isUninstall ? "Open uninstaller" : confirm === "clearCache" ? "Clear cache" : "Remove build & deps"}
+              {isUninstall
+                ? d.uninstall?.type === "reveal"
+                  ? "Show app"
+                  : "Open uninstaller"
+                : confirm === "clearCache"
+                  ? "Clear cache"
+                  : "Remove build & deps"}
             </button>
           </>
         }

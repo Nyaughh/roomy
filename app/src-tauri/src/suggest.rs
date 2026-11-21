@@ -87,11 +87,15 @@ struct Spec {
     general: bool,
 }
 
+#[cfg(windows)]
 const BROWSER_WHAT: &str =
     "Copies of web pages, images and scripts your browser saved so sites load a little faster.";
+#[cfg(windows)]
 const BROWSER_SAFE: &str = "Only the cache folders are touched. Bookmarks, passwords, history, cookies and open tabs are kept.";
+#[cfg(windows)]
 const BROWSER_EFFECT: &str = "Sites load slightly slower the first time you revisit them while the browser rebuilds its cache. Close the browser first for the biggest result; files it's using are skipped.";
 
+#[cfg(windows)]
 macro_rules! browser {
     ($id:literal, $title:literal, [$($t:literal),* $(,)?]) => {
         Spec {
@@ -259,7 +263,7 @@ fn specs() -> Vec<Spec> {
             id: "app-caches",
             title: "App caches",
             category: Category::Recommended,
-            what: "Caches kept by desktop apps built on web tech (Discord, VS Code, Slack, Teams, Spotify, Steam's web views).",
+            what: "Caches kept by desktop apps built on web tech (Discord, VS Code, Slack, Teams, Steam's web views).",
             why_safe: "Only cache folders are touched. Your messages, settings, extensions and sign-ins stay as they are.",
             effect: "The app may start a little slower once while it rebuilds its cache. Files in use are skipped, so close the app first for the biggest result.",
             note: None,
@@ -279,7 +283,6 @@ fn specs() -> Vec<Spec> {
                 "{APPDATA}\\Microsoft\\Teams\\Cache",
                 "{APPDATA}\\Microsoft\\Teams\\Code Cache",
                 "{APPDATA}\\Microsoft\\Teams\\GPUCache",
-                "{LOCALAPPDATA}\\Spotify\\Data",
                 "{LOCALAPPDATA}\\Steam\\htmlcache",
             ],
             default_selected: true,
@@ -360,10 +363,6 @@ fn specs() -> Vec<Spec> {
             ["{HOME}\\.gradle\\caches"]),
         devcache!("nuget-cache", "NuGet HTTP cache", "Package downloads NuGet cached.", true, None,
             ["{LOCALAPPDATA}\\NuGet\\v3-cache", "{LOCALAPPDATA}\\NuGet\\plugins-cache"]),
-        devcache!("nuget-packages", "NuGet packages folder", "Every NuGet package version restored on this PC.", false,
-            Some("Projects restore the packages they need on the next build."),
-            ["{HOME}\\.nuget\\packages"]),
-        devcache!("maven-repo", "Maven local repository", "Every dependency Maven downloaded.", false, None, ["{HOME}\\.m2\\repository"]),
         devcache!("go-build", "Go build cache", "Compiled Go packages cached to speed up builds.", true, None, ["{LOCALAPPDATA}\\go-build"]),
         devcache!("composer-cache", "Composer cache", "PHP packages Composer downloaded before.", true, None, ["{LOCALAPPDATA}\\Composer\\cache"]),
     ]
@@ -396,8 +395,6 @@ fn specs() -> Vec<Spec> {
             ["{HOME}/.cargo/registry/cache", "{HOME}/.cargo/registry/src", "{HOME}/.cargo/git/checkouts"]),
         devcache!("gradle-cache", "Gradle caches", "Dependencies and build outputs Gradle cached.", false,
             Some("Stop running Gradle daemons first (gradle --stop)."), ["{HOME}/.gradle/caches"]),
-        devcache!("maven-repo", "Maven local repository", "Every dependency Maven downloaded.", false, None, ["{HOME}/.m2/repository"]),
-        devcache!("nuget-packages", "NuGet packages folder", "Every NuGet package version restored on this machine.", false, None, ["{HOME}/.nuget/packages"]),
     ];
     if cfg!(target_os = "macos") {
         v.extend([
@@ -456,7 +453,7 @@ fn specs() -> Vec<Spec> {
                 note: None,
                 action: Action::Contents,
                 targets: &["{HOME}/Library/Caches/*"],
-                default_selected: true,
+                default_selected: false,
                 needs_admin: false,
                 min_age_hours: None,
                 general: true,
@@ -473,7 +470,7 @@ fn specs() -> Vec<Spec> {
             note: None,
             action: Action::Contents,
             targets: &["{HOME}/.cache/*"],
-            default_selected: true,
+            default_selected: false,
             needs_admin: false,
             min_age_hours: None,
             general: true,
@@ -552,7 +549,14 @@ pub fn glob(pattern: &str) -> Vec<PathBuf> {
     }
     current
         .into_iter()
-        .filter(|c| std::fs::symlink_metadata(c).is_ok())
+        .filter(|c| {
+            // Skip anything that is a link or sits below one: suggestions only
+            // ever point at real folders.
+            std::fs::symlink_metadata(c)
+                .map(|m| !m.file_type().is_symlink())
+                .unwrap_or(false)
+                && crate::safety::linked_ancestor(c).is_none()
+        })
         .collect()
 }
 
@@ -844,6 +848,29 @@ mod tests {
     }
 
     #[test]
+    fn glob_never_follows_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("Cache")).unwrap();
+        let link = tmp.path().join("linked");
+        #[cfg(windows)]
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&real)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let through_link = glob(&link.join("Cache").to_string_lossy());
+        assert!(through_link.is_empty(), "{through_link:?}");
+        let star = glob(&tmp.path().join("*").join("Cache").to_string_lossy());
+        assert_eq!(star, vec![real.join("Cache")]);
+    }
+
+    #[test]
     fn no_spec_targets_protected_paths() {
         // Every suggestion target must be deletable under the system guard.
         let guard = crate::safety::Guard::system();
@@ -886,6 +913,7 @@ mod tests {
             mtime: 0,
             kind: KIND_FILE,
             flags: 0,
+            key: 0,
         }
     }
 

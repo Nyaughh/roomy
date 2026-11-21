@@ -4,6 +4,7 @@
 //! buffer. Children of a directory occupy a contiguous id range, sorted by
 //! size (largest first) when the tree is built.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub const NONE: u32 = u32::MAX;
@@ -51,7 +52,7 @@ impl Node {
 }
 
 /// A file-like entry produced by the scanner.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RawEntry {
     pub name: String,
     pub size: u64,
@@ -59,6 +60,8 @@ pub struct RawEntry {
     pub mtime: i64,
     pub kind: u8,
     pub flags: u8,
+    /// File identity for hard-link accounting (0 = unknown).
+    pub key: u64,
 }
 
 /// A directory produced by the scanner, with subtree totals precomputed.
@@ -116,15 +119,28 @@ pub struct Tree {
     pub root_path: String,
     /// Bumped on every mutation so the UI can invalidate cached views.
     pub generation: u64,
+    /// File identity of every node that shares its data with another name
+    /// (hard links). Exactly one live name per identity carries the size.
+    pub link_keys: HashMap<u32, u64>,
+    /// Identities seen under more than one name.
+    pub dup_keys: HashSet<u64>,
 }
 
 impl Tree {
     pub fn from_raw(raw: RawDir, root_path: String) -> Tree {
+        Self::from_raw_with_links(raw, root_path, HashSet::new())
+    }
+
+    /// Build a tree, remembering which files are hard links of each other
+    /// (`dup_keys` are the identities the scan saw under several names).
+    pub fn from_raw_with_links(raw: RawDir, root_path: String, dup_keys: HashSet<u64>) -> Tree {
         let mut t = Tree {
             nodes: Vec::with_capacity((raw.total_files as usize).saturating_add(1024)),
             names: String::new(),
             root_path: root_path.clone(),
             generation: 1,
+            link_keys: HashMap::new(),
+            dup_keys,
         };
         let id = t.push_node(&root_path, raw.kind, raw.flags, NONE, raw.mtime);
         t.nodes[id as usize].size = raw.total_size;
@@ -181,6 +197,9 @@ impl Tree {
                     n.size = f.size;
                     n.logical = f.logical;
                     n.files = u32::from(f.kind == KIND_FILE);
+                    if f.key != 0 && self.dup_keys.contains(&f.key) {
+                        self.link_keys.insert(cid, f.key);
+                    }
                 }
                 Child::Dir(i) => {
                     let d = &dirs[i];
@@ -306,6 +325,7 @@ impl Tree {
         if id == 0 || self.nodes[id as usize].is_deleted() {
             return;
         }
+        let keys = self.subtree_link_keys(id);
         let n = self.nodes[id as usize];
         self.adjust_ancestors(
             id,
@@ -314,11 +334,23 @@ impl Tree {
             -(n.files as i64),
         );
         self.mark_deleted(id);
+        // A removed name may have been the one carrying a hard-linked file's
+        // size; hand it to a surviving name so the data is still counted.
+        self.reconcile_links(&keys);
         self.generation += 1;
     }
 
     /// Replace the contents of directory `id` with a freshly scanned subtree.
     pub fn replace_subtree(&mut self, id: u32, raw: RawDir) {
+        self.replace_subtree_with_links(id, raw, HashSet::new());
+    }
+
+    /// Like `replace_subtree`, merging the rescan's hard-link identities into
+    /// the tree's global accounting so links are never counted twice.
+    pub fn replace_subtree_with_links(&mut self, id: u32, raw: RawDir, new_dups: HashSet<u64>) {
+        let mut keys = self.subtree_link_keys(id);
+        self.dup_keys.extend(new_dups);
+        let first_new = self.nodes.len() as u32;
         let old = self.nodes[id as usize];
         if old.first_child != NONE {
             for c in old.first_child..old.first_child + old.child_count {
@@ -339,7 +371,102 @@ impl Tree {
         }
         self.fill(id, raw);
         self.adjust_ancestors(id, d_size, d_logical, d_files);
+        for (&n, &k) in &self.link_keys {
+            if n >= first_new {
+                keys.insert(k);
+            }
+        }
+        self.reconcile_links(&keys);
         self.generation += 1;
+    }
+
+    fn subtree_link_keys(&self, id: u32) -> HashSet<u64> {
+        let mut out = HashSet::new();
+        if self.link_keys.is_empty() {
+            return out;
+        }
+        let mut stack = vec![id];
+        while let Some(c) = stack.pop() {
+            let n = &self.nodes[c as usize];
+            if n.is_deleted() && c != id {
+                continue;
+            }
+            if let Some(k) = self.link_keys.get(&c) {
+                out.insert(*k);
+            }
+            if n.first_child != NONE {
+                stack.extend(n.first_child..n.first_child + n.child_count);
+            }
+        }
+        out
+    }
+
+    /// Set a leaf's size (e.g. a pseudo "unreadable space" node), keeping
+    /// every ancestor's total consistent.
+    pub fn set_leaf_size(&mut self, id: u32, size: u64, logical: u64) {
+        let n = self.nodes[id as usize];
+        if n.size == size && n.logical == logical {
+            return;
+        }
+        self.nodes[id as usize].size = size;
+        self.nodes[id as usize].logical = logical;
+        self.adjust_ancestors(
+            id,
+            size as i128 - n.size as i128,
+            logical as i128 - n.logical as i128,
+            0,
+        );
+        self.generation += 1;
+    }
+
+    /// For each identity in `keys`, make exactly one live name carry the
+    /// file's size (preferring the name that already did, then the oldest).
+    pub fn reconcile_links(&mut self, keys: &HashSet<u64>) {
+        if keys.is_empty() {
+            return;
+        }
+        let mut members: HashMap<u64, Vec<u32>> = HashMap::new();
+        let mut sizes: HashMap<u64, (u64, u64)> = HashMap::new();
+        for (&node, &key) in &self.link_keys {
+            if !keys.contains(&key) {
+                continue;
+            }
+            let n = &self.nodes[node as usize];
+            let e = sizes.entry(key).or_default();
+            e.0 = e.0.max(n.size);
+            e.1 = e.1.max(n.logical);
+            if !n.is_deleted() {
+                members.entry(key).or_default().push(node);
+            }
+        }
+        for (key, mut list) in members {
+            list.sort_unstable();
+            let (size, logical) = sizes[&key];
+            let keep = list
+                .iter()
+                .copied()
+                .find(|&m| self.nodes[m as usize].size > 0)
+                .unwrap_or(list[0]);
+            for m in list {
+                let (s, l) = if m == keep { (size, logical) } else { (0, 0) };
+                if m == keep {
+                    self.nodes[m as usize].flags &= !FLAG_HARDLINK;
+                } else {
+                    self.nodes[m as usize].flags |= FLAG_HARDLINK;
+                }
+                let n = self.nodes[m as usize];
+                if n.size != s || n.logical != l {
+                    self.nodes[m as usize].size = s;
+                    self.nodes[m as usize].logical = l;
+                    self.adjust_ancestors(
+                        m,
+                        s as i128 - n.size as i128,
+                        l as i128 - n.logical as i128,
+                        0,
+                    );
+                }
+            }
+        }
     }
 
     /// Find a direct child of `id` by name.
@@ -375,6 +502,7 @@ mod tests {
             mtime: 0,
             kind: KIND_FILE,
             flags: 0,
+            key: 0,
         }
     }
 
@@ -431,5 +559,69 @@ mod tests {
         assert_eq!(t.children(sub).count(), 1);
         assert!(t.child_by_name(sub, "big.bin").is_none());
         assert!(t.child_by_name(sub, "left.txt").is_some());
+    }
+
+    fn linked(name: &str, size: u64, key: u64) -> RawEntry {
+        RawEntry {
+            name: name.into(),
+            size,
+            logical: size,
+            kind: KIND_FILE,
+            key,
+            ..Default::default()
+        }
+    }
+
+    /// a/x carries the size; b/y is another name for the same data.
+    fn linked_tree() -> Tree {
+        let mut a = RawDir::new("a".into(), 0);
+        a.files.push(linked("x", 100, 7));
+        a.finish();
+        let mut b = RawDir::new("b".into(), 0);
+        let mut y = linked("y", 0, 7);
+        y.flags = FLAG_HARDLINK;
+        b.files.push(y);
+        b.files.push(file("z", 5));
+        b.finish();
+        let mut root = RawDir::new("r".into(), 0);
+        root.dirs.push(a);
+        root.dirs.push(b);
+        root.finish();
+        Tree::from_raw_with_links(root, "/r".into(), [7u64].into_iter().collect())
+    }
+
+    #[test]
+    fn removing_the_counted_link_hands_its_size_to_the_other_name() {
+        let mut t = linked_tree();
+        assert_eq!(t.nodes[0].size, 105);
+        let a = t.child_by_name(0, "a").unwrap();
+        t.remove(a);
+        let b = t.child_by_name(0, "b").unwrap();
+        let y = t.child_by_name(b, "y").unwrap();
+        assert_eq!(
+            t.nodes[y as usize].size, 100,
+            "the data still exists under b/y"
+        );
+        assert_eq!(t.nodes[y as usize].flags & FLAG_HARDLINK, 0);
+        assert_eq!(t.nodes[b as usize].size, 105);
+        assert_eq!(t.nodes[0].size, 105, "nothing was actually freed");
+    }
+
+    #[test]
+    fn rescanning_a_folder_never_recounts_a_link() {
+        let mut t = linked_tree();
+        let b = t.child_by_name(0, "b").unwrap();
+        // A fresh rescan of b sees y on its own, with its full size.
+        let mut fresh = RawDir::new("b".into(), 0);
+        fresh.files.push(linked("y", 100, 7));
+        fresh.files.push(file("z", 5));
+        fresh.finish();
+        t.replace_subtree_with_links(b, fresh, HashSet::new());
+        assert_eq!(
+            t.nodes[0].size, 105,
+            "a/x still carries it; b/y must not count it again"
+        );
+        let y = t.child_by_name(b, "y").unwrap();
+        assert_eq!(t.nodes[y as usize].size, 0);
     }
 }

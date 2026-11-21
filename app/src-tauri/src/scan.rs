@@ -98,6 +98,8 @@ pub struct ScanCtx {
     root_dev: u64,
     pub denied_paths: Mutex<Vec<String>>,
     pub hardlink_bytes: AtomicU64,
+    /// File identities seen under more than one name (hard links).
+    pub dup_keys: Mutex<HashSet<u64>>,
     pub links_skipped: AtomicU64,
 }
 
@@ -111,6 +113,7 @@ impl ScanCtx {
             root_dev: platform::device_of(root),
             denied_paths: Mutex::new(Vec::new()),
             hardlink_bytes: AtomicU64::new(0),
+            dup_keys: Mutex::new(HashSet::new()),
             links_skipped: AtomicU64::new(0),
         }
     }
@@ -188,6 +191,7 @@ fn walk(ctx: &ScanCtx, path: PathBuf, name: String, mtime: i64) -> RawDir {
                 mtime: e.mtime,
                 kind: KIND_LINK,
                 flags: if e.is_mount { FLAG_MOUNT } else { 0 },
+                key: 0,
             });
             continue;
         }
@@ -198,10 +202,13 @@ fn walk(ctx: &ScanCtx, path: PathBuf, name: String, mtime: i64) -> RawDir {
         let mut flags = 0;
         let mut size = e.alloc;
         let mut logical = e.logical;
+        let mut key = 0;
         if ctx.dedup {
-            if let Some(key) = e.dedup_key {
-                if !ctx.seen.insert(key) {
+            if let Some(k) = e.dedup_key {
+                key = k;
+                if !ctx.seen.insert(k) {
                     ctx.hardlink_bytes.fetch_add(size, Ordering::Relaxed);
+                    ctx.dup_keys.lock().insert(k);
                     flags |= FLAG_HARDLINK;
                     size = 0;
                     logical = 0;
@@ -217,6 +224,7 @@ fn walk(ctx: &ScanCtx, path: PathBuf, name: String, mtime: i64) -> RawDir {
             mtime: e.mtime,
             kind: KIND_FILE,
             flags,
+            key,
         });
     }
     ctx.progress.files.fetch_add(nfiles, Ordering::Relaxed);
@@ -280,11 +288,13 @@ pub fn measure(path: &Path, cancel: Arc<AtomicBool>) -> (u64, u64) {
 }
 
 /// Scan a single directory into a RawDir rooted at `path` with the given name.
-pub fn rescan_dir(path: &Path, name: String, cancel: Arc<AtomicBool>) -> RawDir {
+/// Returns the subtree and the hard-link identities it saw more than once.
+pub fn rescan_dir(path: &Path, name: String, cancel: Arc<AtomicBool>) -> (RawDir, HashSet<u64>) {
     let ctx = ScanCtx::new(path, cancel, Arc::new(Progress::default()));
     let mut raw = scan_dir(&ctx, path);
     raw.name = name;
-    raw
+    let dups = std::mem::take(&mut *ctx.dup_keys.lock());
+    (raw, dups)
 }
 
 #[cfg(windows)]
@@ -675,5 +685,44 @@ mod tests {
         let (bytes, files) = measure(&tmp.path().join("d"), Arc::new(AtomicBool::new(false)));
         assert_eq!(files, 1);
         assert!(bytes >= 9_000);
+    }
+
+    #[test]
+    fn hard_link_accounting_survives_deletes_and_rescans() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("a")).unwrap();
+        fs::create_dir_all(tmp.path().join("b")).unwrap();
+        fs::write(tmp.path().join("a/data.bin"), vec![3u8; 64_000]).unwrap();
+        fs::hard_link(tmp.path().join("a/data.bin"), tmp.path().join("b/same.bin")).unwrap();
+        let (raw, ctx) = scan(tmp.path());
+        if !ctx.dedup {
+            return;
+        }
+        let dups = std::mem::take(&mut *ctx.dup_keys.lock());
+        let mut t = Tree::from_raw_with_links(raw, tmp.path().to_string_lossy().into_owned(), dups);
+        let total = t.nodes[0].logical;
+        assert_eq!(total, 64_000);
+        // Rescan each folder on its own: still counted once.
+        for name in ["a", "b"] {
+            let id = t.child_by_name(0, name).unwrap();
+            let (sub, d) = rescan_dir(
+                &tmp.path().join(name),
+                name.into(),
+                Arc::new(AtomicBool::new(false)),
+            );
+            t.replace_subtree_with_links(id, sub, d);
+            assert_eq!(
+                t.nodes[0].logical, total,
+                "rescan of {name} must not recount"
+            );
+        }
+        // Delete whichever name carries the size: the other name takes over.
+        let a = t.child_by_name(0, "a").unwrap();
+        fs::remove_file(tmp.path().join("a/data.bin")).unwrap();
+        t.remove(a);
+        assert_eq!(
+            t.nodes[0].logical, total,
+            "the data still exists as b/same.bin"
+        );
     }
 }

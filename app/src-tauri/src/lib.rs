@@ -61,6 +61,8 @@ struct ScanData {
     catalog: Arc<catalog::Catalog>,
     /// Storage attribution, cached for the tree generation it was built from.
     storage: Option<Arc<storage::Storage>>,
+    /// NTFS master file table size, when Windows reports it.
+    mft: Option<u64>,
 }
 
 struct AppState {
@@ -152,81 +154,129 @@ fn open_storage_settings() -> Result<(), String> {
     }
 }
 
-fn build_gap(
-    path: &Path,
-    used: u64,
-    scanned: u64,
-    denied: u64,
-    elevated: bool,
-) -> (Option<RawDir>, Vec<GapPart>) {
-    let gap = used as i64 - scanned as i64;
-    let mut parts = Vec::new();
-    if gap <= 0 {
-        return (None, parts);
-    }
-    let gap = gap as u64;
+pub const GAP_MFT: &str = "NTFS file table ($MFT)";
+pub const GAP_BIN: &str = "Recycle Bin (not listable)";
+pub const GAP_REST: &str = "Restore points, reserved & unreadable";
+
+/// The pseudo folder that holds used space no folder listing shows. It's
+/// created for every drive scan (even when empty) so later changes can
+/// re-balance it against the drive's real used space.
+fn gap_dir(has_mft: bool) -> RawDir {
     let mut dir = RawDir::new("System & unreadable space".into(), 0);
     dir.kind = KIND_GAP;
-    let mut left = gap;
-    if let Some(mft) = system::ntfs_mft_bytes(path) {
-        let mft = mft.min(left);
-        if mft > 0 {
-            left -= mft;
-            dir.files.push(RawEntry {
-                name: "NTFS file table ($MFT)".into(),
-                size: mft,
-                logical: mft,
-                mtime: 0,
-                kind: KIND_GAP_PART,
-                flags: 0,
-            });
-            parts.push(GapPart {
-                label: "NTFS file table ($MFT)".into(),
-                bytes: Some(mft),
-                explain: "The index of every file on the drive. It grows with the number of files and Windows manages it.".into(),
-            });
-        }
+    let mut names = Vec::new();
+    if has_mft {
+        names.push(GAP_MFT);
     }
-    if left > 0 {
-        let explain = if cfg!(windows) {
+    if cfg!(windows) {
+        names.push(GAP_BIN);
+    }
+    names.push(GAP_REST);
+    for name in names {
+        dir.files.push(RawEntry {
+            name: name.into(),
+            kind: KIND_GAP_PART,
+            ..Default::default()
+        });
+    }
+    dir.finish();
+    dir.total_files = 0;
+    dir
+}
+
+/// Split the gap into its parts: the MFT and the unlistable part of the
+/// Recycle Bin when known, the rest unexplained.
+pub fn split_gap(gap: u64, mft: Option<u64>, bin_unlisted: u64) -> (u64, u64, u64) {
+    let mft = mft.unwrap_or(0).min(gap);
+    let bin = bin_unlisted.min(gap - mft);
+    (mft, bin, gap - mft - bin)
+}
+
+fn gap_explain(name: &str, denied: u64, elevated: bool) -> String {
+    match name {
+        GAP_MFT => "The index of every file on the drive. It grows with the number of files and Windows manages it.".into(),
+        GAP_BIN => "Files in the Recycle Bin that Windows doesn't let Roomy list one by one. Empty the bin to free this.".into(),
+        _ if cfg!(windows) => {
             let mut s = String::from(
                 "Space Windows reports as used that no folder listing shows: System Restore points and shadow copies (in System Volume Information), file system metadata and reserved storage for updates",
             );
             if denied > 0 && !elevated {
-                s.push_str(&format!(
-                    ", plus {denied} folders Roomy wasn't allowed to open"
-                ));
+                s.push_str(&format!(", plus {denied} folders Roomy wasn't allowed to open"));
             }
             s.push_str(". Run Roomy as administrator to look inside more of it.");
             s
-        } else {
-            format!(
-                "Space the system reports as used that Roomy couldn't attribute to a file: snapshots, file system metadata, purgeable space{}.",
-                if denied > 0 {
-                    format!(" and {denied} folders Roomy wasn't allowed to open")
-                } else {
-                    String::new()
-                }
-            )
-        };
-        dir.files.push(RawEntry {
-            name: "Restore points, reserved & unreadable".into(),
-            size: left,
-            logical: left,
-            mtime: 0,
-            kind: KIND_GAP_PART,
-            flags: 0,
-        });
-        parts.push(GapPart {
-            label: "Restore points, reserved & unreadable".into(),
-            bytes: Some(left),
-            explain,
-        });
+        }
+        _ => format!(
+            "Space the system reports as used that Roomy couldn't attribute to a file: snapshots, file system metadata, purgeable space{}.",
+            if denied > 0 {
+                format!(" and {denied} folders Roomy wasn't allowed to open")
+            } else {
+                String::new()
+            }
+        ),
     }
-    dir.finish();
-    // Pseudo items are not files.
-    dir.total_files = 0;
-    (Some(dir), parts)
+}
+
+/// Re-read the drive's used space and re-balance the gap node so the tree
+/// total always equals what the OS reports as used. Call after any change.
+fn reconcile_gap(d: &mut ScanData) {
+    if !d.summary.is_volume {
+        return;
+    }
+    let root = PathBuf::from(&d.summary.root_path);
+    let Some(u) = system::disk_usage(&root) else {
+        return;
+    };
+    let used = u.total.saturating_sub(u.free);
+    let Some(gap_node) = d
+        .tree
+        .children(0)
+        .find(|&c| d.tree.nodes[c as usize].kind == KIND_GAP)
+    else {
+        return;
+    };
+    let scanned = d.tree.nodes[0]
+        .size
+        .saturating_sub(d.tree.nodes[gap_node as usize].size);
+    let gap = used as i64 - scanned as i64;
+    // Recycle Bin bytes Windows reports but the scan couldn't list.
+    let bin_listed = d
+        .tree
+        .children(0)
+        .find(|&c| d.tree.name(c).eq_ignore_ascii_case("$Recycle.Bin"))
+        .map(|c| d.tree.nodes[c as usize].size)
+        .unwrap_or(0);
+    let bin_total = system::recycle_bin_size_on(&root)
+        .map(|(b, _)| b)
+        .unwrap_or(0);
+    let (mft, bin, rest) = split_gap(
+        gap.max(0) as u64,
+        d.mft,
+        bin_total.saturating_sub(bin_listed),
+    );
+    let parts: Vec<u32> = d.tree.children(gap_node).collect();
+    let mut gap_parts = Vec::new();
+    for p in parts {
+        let name = d.tree.name(p).to_string();
+        let bytes = match name.as_str() {
+            GAP_MFT => mft,
+            GAP_BIN => bin,
+            _ => rest,
+        };
+        d.tree.set_leaf_size(p, bytes, bytes);
+        if bytes > 0 {
+            gap_parts.push(GapPart {
+                explain: gap_explain(&name, d.summary.denied_dirs, d.summary.elevated),
+                label: name,
+                bytes: Some(bytes),
+            });
+        }
+    }
+    d.summary.used = Some(used);
+    d.summary.volume_free = Some(u.free);
+    d.summary.volume_total = Some(u.total);
+    d.summary.gap = gap;
+    d.summary.gap_parts = gap_parts;
 }
 
 #[tauri::command]
@@ -348,16 +398,17 @@ fn run_scan(
     let scanned_logical = raw.total_logical;
     let files = raw.total_files;
     let denied = progress.denied.load(Ordering::Relaxed);
-    let mut gap_parts = Vec::new();
-    if let Some(used) = used {
-        let (gap_dir, parts) = build_gap(&root, used, scanned, denied, elevated);
-        if let Some(g) = gap_dir {
-            raw.dirs.push(g);
-            raw.finish();
-        }
-        gap_parts = parts;
+    let mft = if is_volume {
+        system::ntfs_mft_bytes(&root)
+    } else {
+        None
+    };
+    if is_volume {
+        raw.dirs.push(gap_dir(mft.is_some()));
+        raw.finish();
     }
-    let tree = Tree::from_raw(raw, root_name.clone());
+    let dup_keys = std::mem::take(&mut *ctx.dup_keys.lock());
+    let tree = Tree::from_raw_with_links(raw, root_name.clone(), dup_keys);
     let denied_paths = ctx.denied_paths.lock().clone();
     let summary = Summary {
         root_path: root_name,
@@ -371,8 +422,8 @@ fn run_scan(
         dirs: progress.dirs.load(Ordering::Relaxed),
         denied_dirs: denied,
         denied_samples: denied_paths.into_iter().take(50).collect(),
-        gap: used.map(|u| u as i64 - scanned as i64).unwrap_or(0),
-        gap_parts,
+        gap: 0,
+        gap_parts: Vec::new(),
         hardlink_bytes: ctx.hardlink_bytes.load(Ordering::Relaxed),
         links_skipped: ctx.links_skipped.load(Ordering::Relaxed),
         elapsed_ms: started.elapsed().as_millis() as u64,
@@ -381,12 +432,16 @@ fn run_scan(
     };
     // What's installed (registry, launchers). Cheap: no disk walk.
     let catalog = Arc::new(catalog::load());
-    Some(ScanData {
+    let mut data = ScanData {
         tree,
         summary,
         catalog,
         storage: None,
-    })
+        mft,
+    };
+    reconcile_gap(&mut data);
+    data.summary.generation = data.tree.generation;
+    Some(data)
 }
 
 #[tauri::command]
@@ -514,6 +569,16 @@ struct DeleteReport {
 }
 
 fn refresh_summary(d: &mut ScanData) {
+    // Things moved to (or emptied from) the Recycle Bin change what's listable there.
+    let bin = d
+        .tree
+        .children(0)
+        .find(|&c| d.tree.name(c).eq_ignore_ascii_case("$Recycle.Bin"));
+    if let Some(bin) = bin {
+        let p = d.tree.path(bin);
+        sync_path(d, bin, &p);
+    }
+    reconcile_gap(d);
     let gap_now: u64 = d
         .tree
         .children(0)
@@ -523,12 +588,6 @@ fn refresh_summary(d: &mut ScanData) {
     d.summary.scanned_bytes = d.tree.nodes[0].size.saturating_sub(gap_now);
     d.summary.scanned_logical = d.tree.nodes[0].logical.saturating_sub(gap_now);
     d.summary.files = d.tree.nodes[0].files as u64;
-    if d.summary.is_volume {
-        if let Some(u) = system::disk_usage(Path::new(&d.summary.root_path)) {
-            d.summary.volume_free = Some(u.free);
-            d.summary.volume_total = Some(u.total);
-        }
-    }
     d.summary.generation = d.tree.generation;
 }
 
@@ -542,8 +601,8 @@ fn sync_path(d: &mut ScanData, id: u32, path: &Path) {
         Err(_) => d.tree.remove(id),
         Ok(md) if md.is_dir() && d.tree.nodes[id as usize].kind == KIND_DIR => {
             let name = d.tree.name(id).to_string();
-            let raw = scan::rescan_dir(path, name, Arc::new(AtomicBool::new(false)));
-            d.tree.replace_subtree(id, raw);
+            let (raw, dups) = scan::rescan_dir(path, name, Arc::new(AtomicBool::new(false)));
+            d.tree.replace_subtree_with_links(id, raw, dups);
         }
         Ok(_) => {}
     }
@@ -821,6 +880,10 @@ struct EntitySummary {
     buckets: [u64; 4],
     files: u64,
     reclaimable: u64,
+    /// What "Clear cache" would really free.
+    clearable: u64,
+    /// What "Clean build & deps" would really free.
+    cleanable: u64,
     can_uninstall: bool,
     can_clear_cache: bool,
     can_clean_build: bool,
@@ -839,6 +902,8 @@ fn entity_summary(e: &storage::Entity) -> EntitySummary {
         buckets: e.buckets,
         files: e.files,
         reclaimable: e.reclaimable(),
+        clearable: e.reclaim_cache,
+        cleanable: e.reclaim_build,
         can_uninstall: e.uninstall.is_some(),
         can_clear_cache: !e.cache_dirs.is_empty() && e.buckets[storage::B_CACHE as usize] > 0,
         can_clean_build: !e.junk_dirs.is_empty() && e.buckets[storage::B_BUILD as usize] > 0,
@@ -921,7 +986,7 @@ struct LocationView {
 struct EntityDetails {
     entity: EntitySummary,
     locations: Vec<LocationView>,
-    cache_paths: Vec<String>,
+    cache_paths: Vec<(String, u64)>,
     build_paths: Vec<(String, u64)>,
     uninstall: Option<catalog::Uninstall>,
 }
@@ -954,7 +1019,11 @@ fn get_entity(state: St, id: u32) -> Result<EntityDetails, String> {
                 is_dir: tree.nodes[l.node as usize].kind != KIND_FILE,
             })
             .collect(),
-        cache_paths: e.cache_dirs.iter().filter_map(|&n| path_of(n)).collect(),
+        cache_paths: e
+            .cache_dirs
+            .iter()
+            .filter_map(|&n| Some((path_of(n)?, tree.nodes[n as usize].size)))
+            .collect(),
         build_paths: e
             .junk_dirs
             .iter()
@@ -1136,4 +1205,17 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Roomy");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_gap;
+
+    #[test]
+    fn gap_parts_always_add_up() {
+        assert_eq!(split_gap(1000, Some(300), 200), (300, 200, 500));
+        assert_eq!(split_gap(100, Some(300), 200), (100, 0, 0));
+        assert_eq!(split_gap(250, None, 400), (0, 250, 0));
+        assert_eq!(split_gap(0, Some(10), 10), (0, 0, 0));
+    }
 }

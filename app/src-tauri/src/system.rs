@@ -230,6 +230,19 @@ mod imp {
         (hr >= 0).then_some((info.i64Size.max(0) as u64, info.i64NumItems.max(0) as u64))
     }
 
+    /// Recycle Bin size for one drive.
+    pub fn recycle_bin_size_on(root: &Path) -> Option<(u64, u64)> {
+        use windows_sys::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
+        let mut info = SHQUERYRBINFO {
+            cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+            i64Size: 0,
+            i64NumItems: 0,
+        };
+        let w = to_wide(&root.to_string_lossy());
+        let hr = unsafe { SHQueryRecycleBinW(w.as_ptr(), &mut info) };
+        (hr >= 0).then_some((info.i64Size.max(0) as u64, info.i64NumItems.max(0) as u64))
+    }
+
     pub fn empty_recycle_bin() -> Result<(), String> {
         use windows_sys::Win32::UI::Shell::{
             SHEmptyRecycleBinW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND,
@@ -256,6 +269,8 @@ mod imp {
 mod imp {
     use super::*;
 
+    // statvfs field widths differ between platforms, so some casts are no-ops.
+    #[allow(clippy::unnecessary_cast)]
     pub fn disk_usage(path: &Path) -> Option<DiskUsage> {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
@@ -380,6 +395,11 @@ mod imp {
     pub fn empty_recycle_bin() -> Result<(), String> {
         Err("Empty the Trash from Finder.".into())
     }
+
+    /// The Trash isn't part of a volume's unlistable space on macOS/Linux.
+    pub fn recycle_bin_size_on(_root: &Path) -> Option<(u64, u64)> {
+        None
+    }
 }
 
 pub use imp::*;
@@ -405,9 +425,32 @@ pub fn run_uninstall(u: &crate::catalog::Uninstall) -> Result<String, String> {
             "x-apple.systempreferences:"
         })
         .map(|_| "Uninstall it from Settings ▸ Apps, then press Refresh.".into()),
-        Uninstall::TrashBundle { path } => trash::delete(path)
-            .map(|_| "Moved the app to the Trash.".into())
-            .map_err(|e| e.to_string()),
+        Uninstall::Reveal { path } => reveal(path).map(|_| {
+            "Roomy showed the app in the Finder. Use its own uninstaller if it has one, or drag it to the Trash, then press Refresh.".into()
+        }),
+    }
+}
+
+/// Show an item in the system file manager.
+fn reveal(path: &str) -> Result<(), String> {
+    if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .args(["-R", path])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    } else if cfg!(windows) {
+        std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{path}"))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    } else {
+        let dir = std::path::Path::new(path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        open_target(&dir.to_string_lossy())
     }
 }
 

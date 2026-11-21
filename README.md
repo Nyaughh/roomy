@@ -23,7 +23,7 @@ Roomy is a [Tauri 2](https://tauri.app) app: a Rust backend (parallel scanner, c
   - Games come from Steam, Epic, GOG, Ubisoft, Xbox and known publishers.
   - Projects are detected by `.git`/`package.json`/`Cargo.toml`/…, each with its reclaimable build and dependency size.
   - Everything comes from the same single scan: the catalog of installed apps is read from the registry and launcher manifests, never from a second walk.
-  - Actions: open a location in Explorer or in the map, clear an app's cache, clean a project's build/deps, and uninstall through the app's own uninstaller (Roomy never deletes an installed app's files itself).
+  - Actions: open a location in Explorer or in the map, clear an app's cache, clean a project's build/deps, and uninstall through the app's own uninstaller (on macOS Roomy shows the app in the Finder; it never deletes an installed app's files itself).
 - **Nothing hidden:** for drives, Roomy compares what it found with the space Windows/macOS reports as used. It shows the difference as its own "System & unreadable space" block (NTFS file table, restore points, reserved storage, folders it couldn't open) instead of leaving it out.
 - **Correct counting:** hard links are counted once. Junctions, symlinks and mount points are shown but never followed, so nothing is counted twice and loops are impossible.
 - **Explore** with a treemap you can click into, breadcrumbs and a sorted, virtualized list. It also has a file-type breakdown and the largest files.

@@ -248,6 +248,10 @@ export interface EntitySummary {
   buckets: [number, number, number, number];
   files: number;
   reclaimable: number;
+  /** Bytes "Clear cache" really frees (hard links aware). */
+  clearable: number;
+  /** Bytes "Clean build & deps" really frees (hard links aware). */
+  cleanable: number;
   canUninstall: boolean;
   canClearCache: boolean;
   canCleanBuild: boolean;
@@ -271,12 +275,12 @@ export type UninstallInfo =
   | { type: "url"; url: string; label: string }
   | { type: "launcher"; name: string; url: string | null }
   | { type: "settings" }
-  | { type: "trashBundle"; path: string };
+  | { type: "reveal"; path: string };
 
 export interface EntityDetails {
   entity: EntitySummary;
   locations: { node: number; path: string; bucket: number; bytes: number; isDir: boolean }[];
-  cachePaths: string[];
+  cachePaths: [string, number][];
   buildPaths: [string, number][];
   uninstall: UninstallInfo | null;
 }

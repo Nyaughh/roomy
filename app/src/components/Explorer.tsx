@@ -62,13 +62,14 @@ export function Explorer({
   const [focus, setFocus] = useState(0);
   const [anchor, setAnchor] = useState(0);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [limit, setLimit] = useState(5000);
   const [selDetails, setSelDetails] = useState<NodeDetails[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gen = summary.generation;
 
   useEffect(() => {
     let alive = true;
-    Promise.all([api.children(currentId), api.treemap(currentId, 3), api.node(currentId)])
+    Promise.all([api.children(currentId, limit), api.treemap(currentId, 3), api.node(currentId)])
       .then(([c, t, n]) => {
         if (!alive) return;
         setKids(c);
@@ -84,10 +85,11 @@ export function Explorer({
     return () => {
       alive = false;
     };
-  }, [currentId, gen, setCurrentId, toasts]);
+  }, [currentId, gen, setCurrentId, toasts, limit]);
 
-  // Reset selection when moving to another folder.
+  // Reset selection (and the row limit) when moving to another folder.
   useEffect(() => {
+    setLimit(5000);
     setSelected(new Set());
     setFocus(0);
     setAnchor(0);
@@ -256,7 +258,12 @@ export function Explorer({
                   return (
                     <div key="rest" className="row" style={{ top: v.start, height: ROW }}>
                       <div className="rmain">
-                        <div className="rname muted">{plural(kids!.rest!.count, "more small item")}</div>
+                        <div className="rname muted">
+                          {plural(kids!.rest!.count, "more small item")}{" "}
+                          <button className="link" onClick={() => setLimit((l) => l + 20000)}>
+                            Show more
+                          </button>
+                        </div>
                       </div>
                       <div className="rsize">{bytes(kids!.rest!.size)}</div>
                     </div>

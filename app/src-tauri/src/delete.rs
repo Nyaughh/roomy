@@ -2,7 +2,7 @@
 //! when asked. Recursive deletes never follow junctions or symlinks: a link
 //! is removed as a link and whatever it points at is left untouched.
 
-use crate::safety::Guard;
+use crate::safety::{is_protected_name, linked_ancestor, Guard};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -113,11 +113,105 @@ fn older_than(md: &fs::Metadata, min_age: Option<Duration>) -> bool {
 /// Permanently remove `path`, recursing into real directories only. Items
 /// that can't be removed (in use, no permission) are skipped and counted.
 pub fn remove_tree(path: &Path, min_age: Option<Duration>, stats: &mut Stats) {
+    let dev = device_of(path);
+    remove_tree_on(path, min_age, stats, dev);
+}
+
+#[cfg(unix)]
+fn device_of(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).ok().map(|m| m.dev())
+}
+
+#[cfg(not(unix))]
+fn device_of(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// True if `md` (a directory) lives on a different volume than `dev`.
+#[cfg(unix)]
+fn other_volume(md: &fs::Metadata, dev: Option<u64>) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    dev.map(|d| md.dev() != d).unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn other_volume(_md: &fs::Metadata, _dev: Option<u64>) -> bool {
+    false
+}
+
+/// A Windows volume mount point (a drive mounted into a folder).
+fn is_volume_mount(path: &Path) -> bool {
+    cfg!(windows)
+        && fs::read_link(path)
+            .map(|t| t.to_string_lossy().contains("Volume{"))
+            .unwrap_or(false)
+}
+
+/// Walk a folder (never following links) and refuse if it holds something
+/// that must never be deleted: a registry hive or system file, or another
+/// drive mounted inside it. Run before either kind of delete.
+pub fn inspect(dir: &Path) -> Result<(), String> {
+    let dev = device_of(dir);
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let rd = match fs::read_dir(&d) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            // Can't look inside: can't promise it's safe.
+            Err(e) => return Err(describe(&d, &e)),
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_protected_name(&name) {
+                return Err(format!(
+                    "It contains “{name}” ({}), a system file that must never be deleted.",
+                    p.display()
+                ));
+            }
+            let Ok(md) = fs::symlink_metadata(&p) else {
+                continue;
+            };
+            if is_link(&md) {
+                if is_volume_mount(&p) {
+                    return Err(format!(
+                        "Another drive is mounted inside it at {}.",
+                        p.display()
+                    ));
+                }
+                continue; // a link is removed as a link, never followed
+            }
+            if md.is_dir() {
+                if other_volume(&md, dev) {
+                    return Err(format!(
+                        "Another drive is mounted inside it at {}.",
+                        p.display()
+                    ));
+                }
+                stack.push(p);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_tree_on(path: &Path, min_age: Option<Duration>, stats: &mut Stats, dev: Option<u64>) {
     let md = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return,
         Err(e) => return stats.fail(path, &e),
     };
+    if is_link(&md) && is_volume_mount(path) {
+        stats.failed += 1;
+        stats.first_error.get_or_insert_with(|| {
+            format!(
+                "Skipped {}: another drive is mounted there.",
+                path.display()
+            )
+        });
+        return;
+    }
     if is_link(&md) {
         match remove_link(path, &md) {
             Ok(()) => stats.removed += 1,
@@ -127,10 +221,17 @@ pub fn remove_tree(path: &Path, min_age: Option<Duration>, stats: &mut Stats) {
         return;
     }
     if md.is_dir() {
+        if other_volume(&md, dev) {
+            stats.failed += 1;
+            stats.first_error.get_or_insert_with(|| {
+                format!("Skipped {}: it's on another drive.", path.display())
+            });
+            return;
+        }
         match fs::read_dir(path) {
             Ok(rd) => {
                 for entry in rd.flatten() {
-                    remove_tree(&entry.path(), min_age, stats);
+                    remove_tree_on(&entry.path(), min_age, stats, dev);
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => return,
@@ -155,6 +256,17 @@ pub fn remove_tree(path: &Path, min_age: Option<Duration>, stats: &mut Stats) {
     if !older_than(&md, min_age) {
         return;
     }
+    if path
+        .file_name()
+        .map(|n| is_protected_name(&n.to_string_lossy()))
+        .unwrap_or(false)
+    {
+        stats.failed += 1;
+        stats
+            .first_error
+            .get_or_insert_with(|| format!("Kept {}: it's a system file.", path.display()));
+        return;
+    }
     match remove_file_forced(path) {
         Ok(()) => stats.removed += 1,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -170,6 +282,10 @@ pub fn delete_path(guard: &Guard, path: &Path, mode: Mode) -> Result<Stats, Stri
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Stats::default()),
         Err(e) => return Err(describe(path, &e)),
     };
+    if md.is_dir() && !is_link(&md) {
+        // Both modes remove the whole folder, so check everything inside first.
+        inspect(path)?;
+    }
     match mode {
         Mode::Permanent => {
             let mut stats = Stats::default();
@@ -225,6 +341,13 @@ pub fn delete_contents(
             dir.display()
         ));
     }
+    if let Some(link) = linked_ancestor(dir) {
+        return Err(format!(
+            "{} is reached through a link ({}), so Roomy left it alone.",
+            dir.display(),
+            link.display()
+        ));
+    }
     if !md.is_dir() {
         let mut stats = Stats::default();
         guard.check(dir)?;
@@ -235,7 +358,17 @@ pub fn delete_contents(
     let rd = fs::read_dir(dir).map_err(|e| describe(dir, &e))?;
     for entry in rd.flatten() {
         let p = entry.path();
-        if let Err(reason) = guard.check(&p) {
+        let checked = guard.check(&p).and_then(|_| {
+            let is_real_dir = fs::symlink_metadata(&p)
+                .map(|m| m.is_dir() && !is_link(&m))
+                .unwrap_or(false);
+            if is_real_dir {
+                inspect(&p)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(reason) = checked {
             stats.failed += 1;
             stats.first_error.get_or_insert(reason);
             continue;
@@ -411,6 +544,64 @@ mod tests {
                 assert!(f.exists());
             }
         }
+    }
+
+    #[test]
+    fn targets_reached_through_a_linked_parent_are_refused() {
+        // tmp/real/cache/blob is ordinary, unprotected data. Reaching it via
+        // tmp/link (a junction/symlink to tmp/real) must not be allowed.
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        fs::create_dir_all(real.join("cache")).unwrap();
+        fs::write(real.join("cache/blob"), b"keep").unwrap();
+        let link = tmp.path().join("link");
+        make_dir_link(&real, &link);
+        let g = open_guard();
+        for mode in [Mode::Trash, Mode::Permanent] {
+            assert!(delete_path(&g, &link.join("cache").join("blob"), mode).is_err());
+            assert!(delete_path(&g, &link.join("cache"), mode).is_err());
+        }
+        assert!(delete_contents(&g, &link.join("cache"), None).is_err());
+        assert!(
+            real.join("cache/blob").exists(),
+            "nothing behind the link was touched"
+        );
+        // The same file at its real location is fine.
+        delete_path(&g, &real.join("cache").join("blob"), Mode::Permanent).unwrap();
+        assert!(!real.join("cache/blob").exists());
+    }
+
+    #[test]
+    fn folders_holding_a_registry_hive_are_refused_in_both_modes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("someone");
+        fs::create_dir_all(profile.join("AppData")).unwrap();
+        fs::write(profile.join("NTUSER.DAT"), b"hive").unwrap();
+        fs::write(profile.join("AppData").join("UsrClass.dat"), b"hive").unwrap();
+        fs::write(profile.join("notes.txt"), b"x").unwrap();
+        let g = open_guard();
+        for mode in [Mode::Trash, Mode::Permanent] {
+            let err = delete_path(&g, &profile, mode).unwrap_err();
+            assert!(err.contains(".DAT") || err.contains(".dat"), "{err}");
+        }
+        // Clearing contents skips the protected file and keeps it.
+        let stats = delete_contents(&g, &profile, None).unwrap();
+        assert!(stats.failed >= 1);
+        assert!(profile.join("NTUSER.DAT").exists());
+        assert!(profile.join("AppData").join("UsrClass.dat").exists());
+        assert!(!profile.join("notes.txt").exists());
+    }
+
+    #[test]
+    fn permanent_recursion_keeps_protected_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("d");
+        fs::create_dir_all(d.join("deep")).unwrap();
+        fs::write(d.join("deep").join("pagefile.sys"), b"x").unwrap();
+        let mut stats = Stats::default();
+        remove_tree(&d, None, &mut stats);
+        assert!(d.join("deep").join("pagefile.sys").exists());
+        assert!(stats.failed >= 1);
     }
 
     #[test]
