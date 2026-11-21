@@ -36,13 +36,13 @@ export function Home({ info, onScan }: { info: AppInfo | null; onScan: (path: st
       <div className="home-inner">
         <div className="home-top">
           <div className="brand" style={{ padding: 0 }}>
-            <Mark size={30} />
+            <Mark size={24} />
             Roomy
           </div>
           <ThemeToggle />
         </div>
         <h1>
-          Make <span className="grad-text">room.</span>
+          Make <span className="room-mark">room.</span>
         </h1>
         <p className="lead">
           Pick a drive and Roomy maps every byte on it, nothing hidden. Then it suggests what's safe to clean.

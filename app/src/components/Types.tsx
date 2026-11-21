@@ -18,20 +18,21 @@ import { api, errorText, type Summary, type TypeStat } from "../api";
 import { bytes, count, percent } from "../format";
 import { useToasts } from "./Toasts";
 
+/** Category → brand viz color name (brand/BRAND.md). */
 export const CATEGORY: Record<string, { color: string; icon: typeof Video; blurb: string }> = {
-  Video: { color: "#8B93FF", icon: Video, blurb: "Movies, recordings and clips" },
-  Images: { color: "#6EE7C5", icon: Image, blurb: "Photos, screenshots and artwork" },
-  Audio: { color: "#F49AC1", icon: Music, blurb: "Music, podcasts and recordings" },
-  Documents: { color: "#7CC4FA", icon: FileText, blurb: "PDFs, office files and text" },
-  Archives: { color: "#F5D97A", icon: Archive, blurb: "Zips, disk images and installers' packages" },
-  "Apps & code binaries": { color: "#C4A1FF", icon: AppWindow, blurb: "Programs, libraries and compiled code" },
-  Code: { color: "#5ED3D1", icon: Code2, blurb: "Source code, configs and scripts" },
-  "Virtual disks": { color: "#FFB38A", icon: Server, blurb: "Virtual machine and WSL disks" },
-  "Game data": { color: "#B5E07A", icon: Gamepad2, blurb: "Game assets and packages" },
-  "Data & logs": { color: "#93C5FD", icon: Database, blurb: "Databases, logs, caches and app data" },
-  System: { color: "#A5B4FC", icon: Settings2, blurb: "Page file, hibernation file and drivers" },
-  "Hidden system space": { color: "#6B7190", icon: HardDrive, blurb: "Space in use that no folder shows" },
-  Other: { color: "#9AA0B8", icon: FileQuestion, blurb: "Everything else" },
+  Video: { color: "powder", icon: Video, blurb: "Movies, recordings and clips" },
+  Images: { color: "sage", icon: Image, blurb: "Photos, screenshots and artwork" },
+  Audio: { color: "blush", icon: Music, blurb: "Music, podcasts and recordings" },
+  Documents: { color: "sand", icon: FileText, blurb: "PDFs, office files and text" },
+  Archives: { color: "peach", icon: Archive, blurb: "Zips, disk images and installers' packages" },
+  "Apps & code binaries": { color: "lilac", icon: AppWindow, blurb: "Programs, libraries and compiled code" },
+  Code: { color: "mist", icon: Code2, blurb: "Source code, configs and scripts" },
+  "Virtual disks": { color: "cocoa", icon: Server, blurb: "Virtual machine and WSL disks" },
+  "Game data": { color: "pistachio", icon: Gamepad2, blurb: "Game assets and packages" },
+  "Data & logs": { color: "mauve", icon: Database, blurb: "Databases, logs, caches and app data" },
+  System: { color: "slate", icon: Settings2, blurb: "Page file, hibernation file and drivers" },
+  "Hidden system space": { color: "stone", icon: HardDrive, blurb: "Space in use that no folder shows" },
+  Other: { color: "stone", icon: FileQuestion, blurb: "Everything else" },
 };
 
 export function Types({ summary }: { summary: Summary }) {
@@ -61,8 +62,8 @@ export function Types({ summary }: { summary: Summary }) {
               width: percent(t.size, total),
               background:
                 t.category === "Hidden system space"
-                  ? "repeating-linear-gradient(-45deg, var(--faint) 0 3px, transparent 3px 6px)"
-                  : (CATEGORY[t.category]?.color ?? "#9AA0B8"),
+                  ? "repeating-linear-gradient(-45deg, var(--viz-hatch) 0 3px, var(--viz-stone) 3px 6px)"
+                  : `var(--viz-${CATEGORY[t.category]?.color ?? "stone"})`,
             }}
           />
         ))}
@@ -76,7 +77,7 @@ export function Types({ summary }: { summary: Summary }) {
               <div className="tc-head">
                 <div
                   className="drive-icon"
-                  style={{ width: 34, height: 34, background: `${meta.color}26`, color: meta.color }}
+                  style={{ width: 34, height: 34, background: `var(--viz-${meta.color})`, color: "var(--viz-label)" }}
                 >
                   <Icon size={17} />
                 </div>
@@ -89,7 +90,7 @@ export function Types({ summary }: { summary: Summary }) {
                 <div className="tc-size">{bytes(t.size)}</div>
               </div>
               <div className="bar" style={{ height: 6 }}>
-                <span style={{ width: percent(t.size, total), background: meta.color, borderRadius: 99 }} />
+                <span style={{ width: percent(t.size, total), background: `var(--viz-${meta.color}-deep)`, borderRadius: 99 }} />
               </div>
               <div className="muted" style={{ fontSize: 12.5 }}>
                 {percent(t.size, total)} of scanned space

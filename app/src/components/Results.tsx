@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FileStack, House, LayoutGrid, PieChart, RotateCw, Sparkles } from "lucide-react";
+import { FileStack, House, LayoutGrid, ListChecks, PieChart, RotateCw } from "lucide-react";
 import { api, errorText, type AppInfo, type Suggestion, type Summary } from "../api";
 import { bytes, count, duration, percent, plural } from "../format";
 import { DeleteProvider } from "./DeleteFlow";
@@ -79,7 +79,7 @@ export function Results({
     { key: "explore", label: "Explore", icon: LayoutGrid, kbd: "1" },
     { key: "types", label: "File types", icon: PieChart, kbd: "2" },
     { key: "largest", label: "Largest files", icon: FileStack, kbd: "3" },
-    { key: "suggestions", label: "Suggestions", icon: Sparkles, kbd: "4" },
+    { key: "suggestions", label: "Suggestions", icon: ListChecks, kbd: "4" },
   ];
 
   return (
@@ -87,7 +87,7 @@ export function Results({
       <div className="shell">
         <aside className="sidebar">
           <div className="brand">
-            <Mark size={26} /> Roomy
+            <Mark size={20} /> Roomy
           </div>
           <nav aria-label="Views" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {nav.map((n) => (

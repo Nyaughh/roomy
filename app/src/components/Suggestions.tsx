@@ -6,12 +6,11 @@ import {
   ExternalLink,
   FolderSearch,
   Info,
+  ListChecks,
   Lock,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
   TriangleAlert,
-  Wand2,
 } from "lucide-react";
 import {
   api,
@@ -170,9 +169,6 @@ export function Suggestions({
   return (
     <div className="page">
       <div className="card sugg-hero">
-        <div className="drive-icon" style={{ width: 52, height: 52, borderRadius: 16 }}>
-          <Sparkles size={24} />
-        </div>
         <div style={{ flex: 1 }}>
           {loading && !suggestions ? (
             <>
@@ -182,7 +178,7 @@ export function Suggestions({
           ) : (
             <>
               <div className="amount">
-                <span className="grad-text">{bytes(total)}</span> selected
+                <span className="room-mark">{bytes(total)}</span> selected
               </div>
               <div className="muted">
                 {recommendedTotal > 0
@@ -196,7 +192,7 @@ export function Suggestions({
           {loading ? <span className="spinner" /> : <RefreshCw />}
         </button>
         <button className="btn primary lg" disabled={!selCount || running} onClick={() => setReviewing(true)}>
-          <Wand2 /> Review & clean
+          Review & clean
         </button>
       </div>
 
@@ -274,7 +270,7 @@ export function Suggestions({
                           </div>
                           <div className="fact">
                             <div className="fk">
-                              <Sparkles /> How
+                              <ListChecks /> How
                             </div>
                             {s.action === "guide" ? "Done by Windows' own cleanup tool." : actionText(s) + "."}
                           </div>
@@ -384,7 +380,7 @@ export function Suggestions({
                 Cancel
               </button>
               <button className="btn primary" onClick={clean} disabled={running}>
-                {running ? <span className="spinner" /> : <Wand2 />}
+                {running && <span className="spinner" />}
                 {running ? "Cleaning…" : `Clean up ${bytes(total)}`}
               </button>
             </>
@@ -458,7 +454,7 @@ export function Suggestions({
           }
         >
           <div className="result-hero">
-            <div className="amount grad-text">{bytes(result.report.freed)}</div>
+            <div className="amount room-mark">{bytes(result.report.freed)}</div>
             <div className="muted">freed on your drive</div>
             {result.trashed > 0 && (
               <div className="muted" style={{ marginTop: 6 }}>

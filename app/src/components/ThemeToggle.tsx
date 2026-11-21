@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { getThemePref, setThemePref, type ThemePref } from "../theme";
 
-const ORDER: ThemePref[] = ["system", "dark", "light"];
+const ORDER: ThemePref[] = ["light", "dark", "system"];
 const LABEL: Record<ThemePref, string> = {
   system: "Theme: follow system",
   dark: "Theme: dark",

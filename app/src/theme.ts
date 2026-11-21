@@ -5,7 +5,8 @@ const media = window.matchMedia("(prefers-color-scheme: light)");
 
 export function getThemePref(): ThemePref {
   const v = localStorage.getItem(KEY);
-  return v === "dark" || v === "light" ? v : "system";
+  // Light first (brand v2); "system" and "dark" are opt-in.
+  return v === "dark" || v === "system" ? v : "light";
 }
 
 function apply(pref: ThemePref) {

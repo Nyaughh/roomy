@@ -33,21 +33,15 @@ export function Scanning({ path, onCancel }: { path: string; onCancel: () => voi
       <div className="scan-card" aria-live="polite">
         <div className="scan-ring">
           <svg viewBox="0 0 180 180" aria-hidden="true">
-            <defs>
-              <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stopColor="#8B93FF" />
-                <stop offset="1" stopColor="#6EE7C5" />
-              </linearGradient>
-            </defs>
-            <circle cx="90" cy="90" r={R} fill="none" stroke="var(--raised-2)" strokeWidth="10" />
+            <circle cx="90" cy="90" r={R} fill="none" stroke="var(--sunken)" strokeWidth="8" />
             {frac !== null ? (
               <circle
                 cx="90"
                 cy="90"
                 r={R}
                 fill="none"
-                stroke="url(#ring)"
-                strokeWidth="10"
+                stroke="var(--ink)"
+                strokeWidth="8"
                 strokeLinecap="round"
                 strokeDasharray={`${C * frac} ${C}`}
                 style={{ transition: "stroke-dasharray 0.3s ease" }}
@@ -59,8 +53,8 @@ export function Scanning({ path, onCancel }: { path: string; onCancel: () => voi
                   cy="90"
                   r={R}
                   fill="none"
-                  stroke="url(#ring)"
-                  strokeWidth="10"
+                  stroke="var(--ink)"
+                  strokeWidth="8"
                   strokeLinecap="round"
                   strokeDasharray={`${C * 0.25} ${C}`}
                 />

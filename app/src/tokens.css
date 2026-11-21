@@ -1,0 +1,138 @@
+/* Copied verbatim from brand/tokens.css (brand v2, owned by the brand/ folder). Update both together. */
+/* Roomy brand tokens v2: soft pastels on warm paper, near-black ink.
+   Source of truth: brand/tokens.json. Light is the default.
+   Dark: set data-theme="dark" on <html> (apps may also mirror this inside a prefers-color-scheme query). */
+
+:root {
+  /* Neutrals: warm paper and stone, near-black ink. These carry most of every screen. */
+  --paper: #f4f2ec;
+  --surface: #fbfaf6;
+  --sunken: #eae7df;
+  --line: #dedad0;
+  --line-strong: #c9c3b7;
+  --ink: #1b1a17;
+  --ink-2: #5c584f;
+  --ink-3: #6a655b;
+
+  /* Signature: butter. Fill for the primary action and the "room made" highlight; always ink text on it. */
+  --butter: #f6d374;
+  --butter-hover: #f0c85a;
+  --butter-ink: #1b1a17;
+  --butter-deep: #7a5a0c; /* butter as text or icon on paper */
+  --butter-wash: #faebc2;
+
+  /* Status */
+  --danger: #b5382a;
+  --danger-ink: #ffffff;
+  --danger-wash: #f7dcd6;
+  --positive: #466a3d;
+  --positive-wash: #dde8d6;
+  --focus: #1b1a17;
+  --selection: #f6d37466;
+
+  /* Data viz: pastel fills carry ink labels; -deep is the same hue for text, legends and icons. */
+  --viz-powder: #c8d5e6;
+  --viz-powder-deep: #3e5a80;
+  --viz-sage: #cedcc5;
+  --viz-sage-deep: #466a3d;
+  --viz-lilac: #d8cfe8;
+  --viz-lilac-deep: #5d4c86;
+  --viz-peach: #f3d6bf;
+  --viz-peach-deep: #8e4f26;
+  --viz-mist: #c6dddf;
+  --viz-mist-deep: #2f6a70;
+  --viz-blush: #f0d0cc;
+  --viz-blush-deep: #9a3f37;
+  --viz-pistachio: #e0e6bf;
+  --viz-pistachio-deep: #5b6620;
+  --viz-sand: #e6dac3;
+  --viz-sand-deep: #74602f;
+  --viz-mauve: #e5cedc;
+  --viz-mauve-deep: #80456a;
+  --viz-cocoa: #dcc9bc;
+  --viz-cocoa-deep: #6e5243;
+  --viz-slate: #bfc3c9;
+  --viz-slate-deep: #4e5560;
+  --viz-stone: #d8d3ca;
+  --viz-stone-deep: #5c584f;
+  --viz-label: #1b1a17;
+  --viz-hatch: #5c584f33;
+  --viz-highlight: #f6d374;
+
+  /* Type */
+  --font-sans: "Instrument Sans Variable", "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+  /* Shape, depth, motion */
+  --radius-tile: 8px;
+  --radius-field: 10px;
+  --radius-window: 14px;
+  --radius-card: 18px;
+  --radius-pill: 999px;
+  --shadow-window: 0 1px 2px rgba(27, 26, 23, 0.06), 0 24px 60px -24px rgba(27, 26, 23, 0.22);
+  --shadow-pop: 0 8px 24px -8px rgba(27, 26, 23, 0.25);
+  --ease: cubic-bezier(0.2, 0.7, 0.1, 1);
+  --dur-fast: 160ms;
+  --dur-base: 240ms;
+  --dur-slow: 420ms;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --paper: #131210;
+  --surface: #1c1b18;
+  --sunken: #0e0d0b;
+  --line: #2a2824;
+  --line-strong: #3d3a34;
+  --ink: #f2f0ea;
+  --ink-2: #a7a296;
+  --ink-3: #8b867b;
+
+  --butter: #f2d27a;
+  --butter-hover: #f6db92;
+  --butter-ink: #1b1a17;
+  --butter-deep: #f2d27a;
+  --butter-wash: #3a3220;
+
+  --danger: #e87a6a;
+  --danger-ink: #1b1a17;
+  --danger-wash: #3a201c;
+  --positive: #b1c2a6;
+  --positive-wash: #232b20;
+  --focus: #f2d27a;
+  --selection: #f2d27a55;
+
+  --viz-powder: #a9b9cf;
+  --viz-powder-deep: #c8d5e6;
+  --viz-sage: #b1c2a6;
+  --viz-sage-deep: #cedcc5;
+  --viz-lilac: #bbb0cf;
+  --viz-lilac-deep: #d8cfe8;
+  --viz-peach: #d9b79e;
+  --viz-peach-deep: #f3d6bf;
+  --viz-mist: #a7c1c3;
+  --viz-mist-deep: #c6dddf;
+  --viz-blush: #d6b0ab;
+  --viz-blush-deep: #f0d0cc;
+  --viz-pistachio: #c3caa0;
+  --viz-pistachio-deep: #e0e6bf;
+  --viz-sand: #cbbea5;
+  --viz-sand-deep: #e6dac3;
+  --viz-mauve: #c9afbf;
+  --viz-mauve-deep: #e5cedc;
+  --viz-cocoa: #c1ad9f;
+  --viz-cocoa-deep: #dcc9bc;
+  --viz-slate: #a3a8af;
+  --viz-slate-deep: #bfc3c9;
+  --viz-stone: #bdb7ac;
+  --viz-stone-deep: #d8d3ca;
+  --viz-label: #1b1a17;
+  --viz-hatch: #1b1a1733;
+  --viz-highlight: #f2d27a;
+
+  --shadow-window: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 24px 60px -24px rgba(0, 0, 0, 0.7);
+  --shadow-pop: 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+
+  color-scheme: dark;
+}

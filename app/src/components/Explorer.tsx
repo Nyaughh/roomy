@@ -17,7 +17,7 @@ import { api, errorText, type Children, type Crumb, type NodeDetails, type NodeI
 import { bytes, count, date, percent, plural } from "../format";
 import { ContextMenu, type MenuState } from "./ContextMenu";
 import { binName, useDelete } from "./DeleteFlow";
-import { PALETTE, Treemap } from "./Treemap";
+import { Treemap, viz } from "./Treemap";
 import { useToasts } from "./Toasts";
 
 const ROW = 52;
@@ -263,7 +263,8 @@ export function Explorer({
                   );
                 }
                 const n = items[v.index];
-                const color = PALETTE[v.index % PALETTE.length];
+                const fill = viz(v.index);
+                const deep = viz(v.index, true);
                 const isSel = selected.has(n.id);
                 return (
                   <div
@@ -287,8 +288,8 @@ export function Explorer({
                     <div
                       className="ricon"
                       style={{
-                        background: n.kind === "gap" ? "var(--raised-2)" : `${color}26`,
-                        color: n.kind === "gap" ? "var(--muted)" : color,
+                        background: n.kind === "gap" ? "var(--sunken)" : fill,
+                        color: "var(--viz-label)",
                       }}
                     >
                       <KindIcon n={n} />
@@ -299,7 +300,7 @@ export function Explorer({
                       </div>
                       <div className="rsub">
                         <div className="rbar" aria-hidden>
-                          <span style={{ width: percent(n.size, parentSize), background: color }} />
+                          <span style={{ width: percent(n.size, parentSize), background: deep }} />
                         </div>
                         <span className="ellip">{subtitle(n)}</span>
                       </div>

@@ -5,20 +5,26 @@ import { bytes, percent, plural } from "../format";
 
 type HNode = HierarchyRectangularNode<TreemapNode>;
 
-export const PALETTE = [
-  "#8B93FF",
-  "#6EE7C5",
-  "#7CC4FA",
-  "#C4A1FF",
-  "#FFB38A",
-  "#F5D97A",
-  "#F49AC1",
-  "#5ED3D1",
-  "#B5E07A",
-  "#A5B4FC",
-  "#FCA5A5",
-  "#93C5FD",
-];
+/** Brand data-viz order for treemap folders (see brand/BRAND.md). */
+export const VIZ = [
+  "powder",
+  "sage",
+  "lilac",
+  "peach",
+  "mist",
+  "blush",
+  "pistachio",
+  "sand",
+  "mauve",
+  "cocoa",
+  "slate",
+  "stone",
+] as const;
+
+/** CSS color for viz slot `i`: the pastel fill, or its deep tone for text and bars. */
+export function viz(i: number, deep = false): string {
+  return `var(--viz-${VIZ[i % VIZ.length]}${deep ? "-deep" : ""})`;
+}
 
 const HEADER = 20;
 
@@ -146,11 +152,16 @@ export function Treemap({
     const ctx = c.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const css = getComputedStyle(document.documentElement);
-    const surface = css.getPropertyValue("--surface").trim() || "#11131f";
-    const text = css.getPropertyValue("--text").trim() || "#f2f3fa";
-    const faint = css.getPropertyValue("--faint").trim() || "#6b7190";
-    const raised = css.getPropertyValue("--raised-2").trim() || "#1f2336";
-    const light = document.documentElement.dataset.theme === "light";
+    const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+    const surface = v("--surface", "#fbfaf6");
+    const text = v("--ink", "#1b1a17");
+    const faint = v("--ink-3", "#6a655b");
+    const sunken = v("--sunken", "#eae7df");
+    const label = v("--viz-label", "#1b1a17");
+    const highlight = v("--viz-highlight", "#f6d374");
+    const stone = v("--viz-stone", "#d8d3ca");
+    const fills = VIZ.map((name) => v(`--viz-${name}`, "#d8d3ca"));
+    const light = document.documentElement.dataset.theme !== "dark";
     ctx.fillStyle = surface;
     ctx.fillRect(0, 0, size.w, size.h);
     const font = getComputedStyle(document.body).fontFamily;
@@ -160,52 +171,57 @@ export function Treemap({
       const h = n.y1 - n.y0;
       if (w < 1 || h < 1) continue;
       const d = n.data;
-      const base = PALETTE[topIndex(n) % PALETTE.length];
+      const base = fills[topIndex(n) % fills.length];
       const r = Math.min(8, w / 3, h / 3);
       const isFrame = !!n.children;
+      const sel = d.id !== null && selected.has(d.id);
+      const hidden = d.kind === "gap" || d.kind === "gapPart";
       ctx.beginPath();
       ctx.roundRect(n.x0, n.y0, w, h, r);
-      if (d.kind === "gap" || d.kind === "gapPart") {
-        ctx.fillStyle = hatchPattern(ctx, alpha(light ? "#8a8fa8" : "#6b7190", 0.55), raised) ?? raised;
+      if (sel) {
+        // The one butter thing in the view: what you picked.
+        ctx.fillStyle = highlight;
+      } else if (hidden) {
+        ctx.fillStyle = hatchPattern(ctx, alpha(light ? "#5C584F" : "#1B1A17", 0.3), stone) ?? stone;
       } else if (d.kind === "rest") {
-        ctx.fillStyle = raised;
+        ctx.fillStyle = sunken;
       } else if (isFrame) {
-        ctx.fillStyle = alpha(base, light ? 0.22 : 0.16);
+        ctx.fillStyle = alpha(base, light ? 0.42 : 0.2);
       } else {
-        const depthShade = (n.depth - 1) * (light ? -0.06 : 0.07);
-        ctx.fillStyle = d.kind === "dir" ? shade(base, depthShade - (light ? 0.04 : 0.1)) : shade(base, depthShade);
+        const depthShade = -(n.depth - 1) * 0.045;
+        ctx.fillStyle = shade(base, d.kind === "dir" ? depthShade - 0.05 : depthShade);
       }
       ctx.fill();
 
-      const sel = d.id !== null && selected.has(d.id);
-      if (sel || hover?.node === n) {
+      if (hover?.node === n && !sel) {
         ctx.lineWidth = 2;
-        ctx.strokeStyle = sel ? text : alpha(light ? "#14162B" : "#FFFFFF", 0.85);
+        ctx.strokeStyle = text;
         ctx.beginPath();
         ctx.roundRect(n.x0 + 1, n.y0 + 1, w - 2, h - 2, r);
         ctx.stroke();
       }
 
-      // Labels
-      const onFill = !isFrame && d.kind !== "rest" && d.kind !== "gap" && d.kind !== "gapPart";
-      ctx.fillStyle = onFill ? "#14162B" : d.kind === "rest" ? faint : text;
+      // Labels: ink on pastel fills; theme ink on frames.
+      const onFill = sel || (!isFrame && d.kind !== "rest");
+      ctx.fillStyle = onFill ? label : d.kind === "rest" ? faint : text;
       ctx.textBaseline = "middle";
       if (isFrame) {
         if (w > 70 && h > 60) {
           ctx.font = `600 11.5px ${font}`;
-          const sizeText = bytes(d.size);
+          if (sel || hidden) ctx.fillStyle = label;
+        const sizeText = bytes(d.size);
           const sw = ctx.measureText(sizeText).width;
-          const label = ellipsize(ctx, d.name, w - sw - 22);
-          ctx.fillText(label, n.x0 + 8, n.y0 + HEADER / 2 + 1);
+          const title = ellipsize(ctx, d.name, w - sw - 22);
+          ctx.fillText(title, n.x0 + 8, n.y0 + HEADER / 2 + 1);
           ctx.globalAlpha = 0.7;
           ctx.fillText(sizeText, n.x1 - sw - 8, n.y0 + HEADER / 2 + 1);
           ctx.globalAlpha = 1;
         }
       } else if (w > 46 && h > 26) {
         ctx.font = `600 12px ${font}`;
-        const label = ellipsize(ctx, d.name, w - 14);
+        const title = ellipsize(ctx, d.name, w - 14);
         const twoLines = h > 44;
-        ctx.fillText(label, n.x0 + 7, n.y0 + (twoLines ? 15 : h / 2));
+        ctx.fillText(title, n.x0 + 7, n.y0 + (twoLines ? 15 : h / 2));
         if (twoLines) {
           ctx.font = `500 11px ${font}`;
           ctx.globalAlpha = 0.72;
