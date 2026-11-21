@@ -1,0 +1,197 @@
+---
+import AppMock from "./AppMock.astro";
+import Icon from "./Icon.astro";
+import { LINKS, SITE } from "../site";
+---
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="glow" aria-hidden="true"></div>
+  <div class="container">
+    <div class="copy">
+      <p class="kicker">
+        <span class="badge">v{SITE.version}</span>
+        <span>Free and open source<span class="k-os"> · Windows and macOS</span></span>
+      </p>
+      <h1 id="hero-title">Make <span class="grad-text">room.</span></h1>
+      <p class="lede">
+        Roomy scans your whole drive in moments and shows where every gigabyte went, with nothing hidden. Then it helps
+        you clear space safely, explaining each cleanup in plain words before anything is removed.
+      </p>
+
+      <div class="ctas">
+        <!-- The visitor's OS (set in <head>) picks which primary button shows; the others stay one click away. -->
+        <a class="btn btn-primary for-win" href={LINKS.windowsExe}>
+          <Icon name="windows" size={18} /> Download for Windows
+        </a>
+        <a class="btn btn-primary for-mac" href={LINKS.macDmg}>
+          <Icon name="apple" size={18} /> Download for macOS
+        </a>
+        <a class="btn btn-primary for-other" href="#download">
+          <Icon name="download" size={18} /> Get Roomy
+        </a>
+        <a class="btn btn-ghost alt-win" href={LINKS.macDmg}><Icon name="apple" size={18} /> macOS</a>
+        <a class="btn btn-ghost alt-mac" href={LINKS.windowsExe}><Icon name="windows" size={18} /> Windows</a>
+        <a class="btn btn-ghost alt-other" href={LINKS.github}><Icon name="github" size={18} /> View on GitHub</a>
+      </div>
+      <p class="meta">
+        <span class="for-win-t">Windows 10 or 11, 64-bit</span>
+        <span class="for-mac-t">macOS 10.15 or newer · Apple silicon and Intel</span>
+        <span class="for-other-t">Desktop app for Windows 10/11 and macOS 10.15+</span>
+        <span aria-hidden="true">·</span>
+        <a href="#install">Install notes</a>
+      </p>
+    </div>
+
+    <div class="stage">
+      <AppMock />
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    position: relative;
+    padding-top: clamp(2.5rem, 6vw, 4.5rem);
+    padding-bottom: 0;
+    isolation: isolate;
+  }
+  .glow {
+    position: absolute;
+    inset: -68px 0 auto;
+    height: 900px;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(40% 38% at 32% 18%, var(--glow-1), transparent 70%),
+      radial-gradient(34% 32% at 70% 26%, var(--glow-2), transparent 70%);
+  }
+  .copy {
+    max-width: 780px;
+    margin-inline: auto;
+    text-align: center;
+  }
+  .kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.3rem 0.85rem 0.3rem 0.35rem;
+    border-radius: 99px;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .badge {
+    padding: 0.1rem 0.55rem;
+    border-radius: 99px;
+    background: var(--grad);
+    color: var(--ink);
+    font-weight: 650;
+    font-size: 0.78rem;
+  }
+  h1 {
+    margin-top: 1.25rem;
+    font-size: clamp(3.4rem, 10vw, 6.5rem);
+    font-weight: 700;
+    letter-spacing: -0.05em;
+    line-height: 0.95;
+  }
+  h1 .grad-text {
+    padding-right: 0.04em;
+  }
+  .lede {
+    max-width: 620px;
+    margin: 1.5rem auto 0;
+    color: var(--muted);
+    font-size: clamp(1.05rem, 1.6vw, 1.2rem);
+    line-height: 1.6;
+  }
+  .ctas {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 2rem;
+  }
+  .ctas .btn {
+    --h: 52px;
+    padding-inline: 1.5rem;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  .meta a {
+    color: var(--accent-text);
+    text-decoration: none;
+  }
+  .meta a:hover {
+    text-decoration: underline;
+  }
+
+  /* OS-specific CTA visibility */
+  .for-win,
+  .for-mac,
+  .alt-win,
+  .alt-mac,
+  .alt-other,
+  .for-win-t,
+  .for-mac-t {
+    display: none;
+  }
+  :global([data-os="win"]) .for-win,
+  :global([data-os="win"]) .alt-win,
+  :global([data-os="mac"]) .for-mac,
+  :global([data-os="mac"]) .alt-mac,
+  :global([data-os="other"]) .alt-other {
+    display: inline-flex;
+  }
+  :global([data-os="win"]) .for-win-t,
+  :global([data-os="mac"]) .for-mac-t {
+    display: inline;
+  }
+  :global([data-os="win"]) .for-other,
+  :global([data-os="mac"]) .for-other {
+    display: none;
+  }
+  :global([data-os="win"]) .for-other-t,
+  :global([data-os="mac"]) .for-other-t {
+    display: none;
+  }
+
+  .stage {
+    position: relative;
+    margin-top: clamp(2.5rem, 5vw, 3.5rem);
+    animation: rise 1s var(--ease) 0.1s both;
+  }
+  .stage::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: -6% -4% -12%;
+    background:
+      radial-gradient(45% 55% at 30% 45%, rgb(139 147 255 / 0.2), transparent 70%),
+      radial-gradient(45% 55% at 72% 55%, rgb(110 231 197 / 0.14), transparent 70%);
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+  }
+
+  @media (max-width: 560px) {
+    .ctas .btn {
+      flex: 1 1 100%;
+    }
+    .k-os {
+      display: none;
+    }
+  }
+</style>

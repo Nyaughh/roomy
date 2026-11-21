@@ -1,0 +1,137 @@
+---
+import Icon from "./Icon.astro";
+import { LINKS } from "../site";
+
+const faqs = [
+  {
+    q: "Is Roomy really free?",
+    a: `Yes. Roomy is free and open source, with no trial, no ads and no paid tier. The code lives on <a href="${LINKS.github}">GitHub</a>.`,
+  },
+  {
+    q: "Why does Windows or macOS warn me when I open it?",
+    a: "Roomy isn't code-signed or notarized yet, and both systems are cautious about apps without a paid certificate. The warning doesn't mean anything is wrong. Follow the short <a href=\"#install\">install notes</a> to open it the first time; after that it launches normally.",
+  },
+  {
+    q: "Could Roomy delete something important?",
+    a: "Roomy is built to make that very hard. Critical system folders are blocked outright, nothing that holds your own content is ever pre-selected, and every cleanup ends on a review screen that lists each item, its size and how it will be removed. Nothing happens until you confirm.",
+  },
+  {
+    q: "I removed something by mistake. Can I get it back?",
+    a: "Files and folders you choose go to the Recycle Bin (or Trash on a Mac) by default, so you can restore them from there. Caches and temp files are deleted permanently, because moving them to the bin wouldn't free any space, but apps rebuild them on their own when needed.",
+  },
+  {
+    q: "Does Roomy upload anything or phone home?",
+    a: "No. Roomy works fully offline: no account, no telemetry, no analytics and no network calls at all. Your file list never leaves your computer.",
+  },
+  {
+    q: "My disk says it's fuller than all my folders add up to. Why?",
+    a: "Operating systems keep space for things you never see in a file browser: hibernation and page files, restore points or local snapshots, reserved storage, and folders you don't have permission to open. Most tools leave that as an unexplained gap. Roomy shows it as its own labeled block, so 100% of used space is accounted for.",
+  },
+  {
+    q: "How do I update to a new version?",
+    a: `Version 0.1.0 doesn't update itself yet. Download the newest installer from this page or from <a href="${LINKS.releases}">GitHub Releases</a> and install it over the old one.`,
+  },
+  {
+    q: "Is there a Linux version?",
+    a: `Not yet. Roomy runs on Windows 10 and 11 and on macOS 10.15 or newer. Watch the <a href="${LINKS.github}">GitHub repository</a> for news.`,
+  },
+];
+---
+
+<section id="faq" class="section" aria-labelledby="faq-title">
+  <div class="container faq">
+    <div class="section-head">
+      <p class="eyebrow">FAQ</p>
+      <h2 id="faq-title">Questions, answered</h2>
+      <p>Something else on your mind? <a href={LINKS.issues}>Open an issue on GitHub</a>.</p>
+    </div>
+    <div class="list">
+      {faqs.map((f, i) => (
+        <details class="item" open={i === 0}>
+          <summary>
+            <span>{f.q}</span>
+            <span class="plus" aria-hidden="true"><Icon name="plus" size={18} /></span>
+          </summary>
+          <p set:html={f.a} />
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .faq {
+    display: grid;
+    grid-template-columns: minmax(240px, 0.75fr) 1.6fr;
+    gap: clamp(2rem, 5vw, 4rem);
+    align-items: start;
+  }
+  .section-head {
+    position: sticky;
+    top: 100px;
+    margin-bottom: 0;
+  }
+  .section-head a,
+  .item :global(a) {
+    color: var(--accent-text);
+  }
+  .list {
+    display: grid;
+    gap: 0.6rem;
+  }
+  .item {
+    border-radius: var(--r-md);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    transition: border-color 0.2s;
+  }
+  .item[open] {
+    border-color: var(--border-strong);
+  }
+  summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.1rem 1.25rem;
+    cursor: pointer;
+    list-style: none;
+    font-weight: 600;
+    font-size: 1.02rem;
+    border-radius: var(--r-md);
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  .plus {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    background: var(--raised);
+    color: var(--muted);
+    transition:
+      transform 0.3s var(--ease),
+      color 0.2s;
+  }
+  .item[open] .plus {
+    transform: rotate(45deg);
+    color: var(--text);
+  }
+  .item p {
+    padding: 0 1.25rem 1.2rem;
+    color: var(--muted);
+    font-size: 0.975rem;
+  }
+
+  @media (max-width: 860px) {
+    .faq {
+      grid-template-columns: 1fr;
+    }
+    .section-head {
+      position: static;
+    }
+  }
+</style>

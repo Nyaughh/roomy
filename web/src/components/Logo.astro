@@ -1,0 +1,37 @@
+---
+// Mark + rounded stroke wordmark (from brand/logo.svg); the wordmark follows currentColor
+// so it tracks the site's theme toggle rather than the OS color scheme.
+import Mark from "./Mark.astro";
+interface Props {
+  id?: string;
+  height?: number;
+}
+const { id = "logo", height = 30 } = Astro.props;
+---
+
+<span class="logo" style={`--h:${height}px`}>
+  <Mark size={height} id={id} />
+  <svg class="word" viewBox="405 102 897 254" aria-hidden="true">
+    <g fill="none" stroke="currentColor" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M425 252 V185 A65 65 0 0 1 490 120"></path>
+      <circle cx="612" cy="186" r="66"></circle>
+      <circle cx="804" cy="186" r="66"></circle>
+      <path d="M922 252 V170 A50 50 0 0 1 1022 170 V252 M1022 170 A50 50 0 0 1 1122 170 V252"></path>
+      <path d="M1182 120 V188 A50 50 0 0 0 1282 188 M1282 120 V282 A56 56 0 0 1 1226 338 H1204"></path>
+    </g>
+  </svg>
+  <span class="sr-only">Roomy</span>
+</span>
+
+<style>
+  .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--h) * 0.32);
+  }
+  .word {
+    height: calc(var(--h) * 0.78);
+    width: auto;
+    margin-top: calc(var(--h) * 0.14);
+  }
+</style>

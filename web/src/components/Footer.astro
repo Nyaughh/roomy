@@ -1,0 +1,112 @@
+---
+import Logo from "./Logo.astro";
+import Icon from "./Icon.astro";
+import { LINKS, SITE } from "../site";
+---
+
+<footer class="footer">
+  <div class="container">
+    <div class="cta card">
+      <div>
+        <h2>Ready to make some room?</h2>
+        <p>Free for Windows and macOS. Scan your drive in moments, clean up with confidence.</p>
+      </div>
+      <div class="cta-btns">
+        <a class="btn btn-primary" href="#download"><Icon name="download" size={18} /> Download Roomy</a>
+        <a class="btn btn-ghost" href={LINKS.github}><Icon name="github" size={18} /> Star on GitHub</a>
+      </div>
+    </div>
+
+    <div class="bottom">
+      <div class="brand">
+        <Logo id="ftr" height={26} />
+        <p>{SITE.tagline} A storage analyzer and cleaner that hides nothing.</p>
+      </div>
+      <nav aria-label="Footer">
+        <ul>
+          <li><a href={LINKS.github}>GitHub</a></li>
+          <li><a href={LINKS.releases}>Releases</a></li>
+          <li><a href={LINKS.issues}>Report an issue</a></li>
+          <li><a href="#faq">FAQ</a></li>
+        </ul>
+      </nav>
+    </div>
+    <p class="fine">Roomy v{SITE.version} · Free and open source · Made with care for tidy disks.</p>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    padding-bottom: 2.5rem;
+  }
+  .cta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+    padding: clamp(1.8rem, 4vw, 3rem);
+    border-radius: var(--r-xl);
+    overflow: hidden;
+    background:
+      radial-gradient(80% 140% at 100% 0%, color-mix(in srgb, var(--mint) 14%, transparent), transparent 60%),
+      radial-gradient(80% 140% at 0% 100%, color-mix(in srgb, var(--peri) 18%, transparent), transparent 60%),
+      var(--surface);
+  }
+  .cta h2 {
+    font-size: clamp(1.6rem, 3.2vw, 2.3rem);
+  }
+  .cta p {
+    margin-top: 0.6rem;
+    color: var(--muted);
+  }
+  .cta-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    flex: none;
+  }
+  .bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 2rem;
+    margin-top: 3.5rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+  }
+  .brand p {
+    margin-top: 0.8rem;
+    color: var(--muted);
+    font-size: 0.925rem;
+  }
+  ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.5rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  nav a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.925rem;
+  }
+  nav a:hover {
+    color: var(--text);
+  }
+  .fine {
+    margin-top: 2rem;
+    color: var(--muted);
+    font-size: 0.825rem;
+    opacity: 0.85;
+  }
+
+  @media (max-width: 760px) {
+    .cta,
+    .bottom {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+</style>

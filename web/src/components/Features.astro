@@ -1,0 +1,368 @@
+---
+import Icon from "./Icon.astro";
+import Sunburst from "./Sunburst.astro";
+
+const bar = [
+  { label: "Your files", pct: 36, cls: "b1" },
+  { label: "Apps & games", pct: 26, cls: "b2" },
+  { label: "System", pct: 7, cls: "b3" },
+  { label: "Caches & temp", pct: 4, cls: "b4" },
+  { label: "Reserved & hidden", pct: 3, cls: "b5" },
+  { label: "Free", pct: 24, cls: "b6" },
+];
+---
+
+<section id="features" class="section" aria-labelledby="features-title">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">What it does</p>
+      <h2 id="features-title">See everything. Keep what matters. Clear the rest.</h2>
+      <p>
+        Most disk tools show you some of your folders and leave you guessing about the rest. Roomy accounts for the
+        whole drive, then helps you decide what can go.
+      </p>
+    </div>
+
+    <div class="bento">
+      <article class="card f-scan">
+        <div class="f-copy">
+          <span class="f-icon"><Icon name="bolt" /></span>
+          <h3>The whole drive, scanned in moments</h3>
+          <p>
+            A native scanner walks every folder in parallel, so even a full drive with millions of files is mapped
+            quickly. Click into any folder and keep going; nothing has to reload.
+          </p>
+        </div>
+        <div class="scanviz" aria-hidden="true">
+          <div class="scan-rows">
+            <span style="--d:0s; --w:88%"><i></i>Users</span>
+            <span style="--d:.25s; --w:64%"><i></i>Program Files</span>
+            <span style="--d:.5s; --w:42%"><i></i>Windows</span>
+            <span style="--d:.75s; --w:30%"><i></i>Games</span>
+            <span style="--d:1s; --w:18%"><i></i>ProgramData</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card f-hidden">
+        <span class="f-icon"><Icon name="eye" /></span>
+        <h3>100% of used space. Nothing hidden.</h3>
+        <p>
+          Space your apps can't see, like system-reserved areas, restore points and folders you can't open, shows up
+          as its own labeled block instead of a mystery gap.
+        </p>
+        <div class="stack" aria-hidden="true">
+          {bar.map((b) => <span class={b.cls} style={`flex:${b.pct}`} />)}
+        </div>
+        <ul class="stack-legend">
+          <li><i class="b5"></i>Reserved &amp; hidden</li>
+          <li><i class="b6"></i>Free</li>
+          <li class="sum">= 100%</li>
+        </ul>
+      </article>
+
+      <article class="card f-viz">
+        <div class="viz-wrap"><Sunburst /></div>
+        <span class="f-icon"><Icon name="layers" /></span>
+        <h3>Treemap or sunburst</h3>
+        <p>Big things look big. Switch views, hover for sizes, click to zoom into any folder.</p>
+      </article>
+
+      <article class="card f-explain">
+        <span class="f-icon"><Icon name="list" /></span>
+        <h3>Cleanups that explain themselves</h3>
+        <p>Every suggestion says what it is, why it's safe, and whether it comes back on its own.</p>
+        <div class="explain" aria-hidden="true">
+          <p class="ex-h"><span>Browser caches</span><b>4.6 GB</b></p>
+          <p class="ex-b">Copies of websites your browser saved to load pages faster. Safe to clear; it rebuilds as you browse.</p>
+        </div>
+      </article>
+
+      <article class="card f-dev">
+        <span class="f-icon"><Icon name="code" /></span>
+        <h3>Knows developer clutter</h3>
+        <p>Package-manager caches are suggested by default. Old node_modules and build output are there when you opt in.</p>
+        <div class="chips" aria-hidden="true">
+          <span>package caches</span>
+          <span class="opt">node_modules <em>opt-in</em></span>
+          <span class="opt">build output <em>opt-in</em></span>
+        </div>
+      </article>
+
+      <article class="card f-small">
+        <span class="f-icon"><Icon name="files" /></span>
+        <h3>Duplicates, found</h3>
+        <p>Identical files are grouped by content, so you can keep one copy and let the rest go.</p>
+      </article>
+
+      <article class="card f-small">
+        <span class="f-icon"><Icon name="wifi-off" /></span>
+        <h3>Fully offline</h3>
+        <p>No account, no telemetry, no network calls. What's on your disk never leaves your computer.</p>
+      </article>
+
+      <article class="card f-small">
+        <span class="f-icon"><Icon name="heart" /></span>
+        <h3>Free and open source</h3>
+        <p>No trial, no upsell. Read the code, file an issue, or build it yourself.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<style>
+  .bento {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 1rem;
+  }
+  .card {
+    padding: clamp(1.4rem, 2.4vw, 1.9rem);
+    overflow: hidden;
+    transition:
+      border-color 0.3s,
+      transform 0.4s var(--ease);
+  }
+  .card:hover {
+    border-color: var(--border-strong);
+  }
+  .card h3 {
+    margin-top: 1rem;
+    font-size: 1.2rem;
+    letter-spacing: -0.02em;
+  }
+  .card p {
+    margin-top: 0.5rem;
+    color: var(--muted);
+    font-size: 0.975rem;
+  }
+  .f-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    color: var(--accent-text);
+    background: color-mix(in srgb, var(--peri) 13%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--peri) 20%, transparent) inset;
+  }
+
+  .f-scan {
+    grid-column: span 4;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    align-items: center;
+  }
+  .f-hidden {
+    grid-column: span 2;
+  }
+  .f-viz,
+  .f-explain,
+  .f-dev {
+    grid-column: span 2;
+  }
+  .f-small {
+    grid-column: span 2;
+  }
+
+  /* scan visual */
+  .scanviz {
+    padding: 1.1rem;
+    border-radius: 16px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+  }
+  .scan-rows {
+    display: grid;
+    gap: 0.7rem;
+  }
+  .scan-rows span {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    height: 30px;
+    padding: 0 0.7rem;
+    border-radius: 9px;
+    font-size: 0.8rem;
+    font-weight: 560;
+    color: var(--text);
+    isolation: isolate;
+  }
+  .scan-rows span::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--w);
+    z-index: -1;
+    border-radius: inherit;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--peri) 35%, transparent), color-mix(in srgb, var(--mint) 30%, transparent));
+    transform-origin: left;
+    animation: fill 2.8s var(--ease) var(--d) infinite;
+  }
+  .scan-rows i {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--grad);
+  }
+  @keyframes fill {
+    0% {
+      transform: scaleX(0);
+      opacity: 1;
+    }
+    55%,
+    85% {
+      transform: scaleX(1);
+      opacity: 1;
+    }
+    100% {
+      transform: scaleX(1);
+      opacity: 0;
+    }
+  }
+
+  /* 100% bar */
+  .stack {
+    display: flex;
+    gap: 3px;
+    height: 14px;
+    margin-top: 1.4rem;
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .stack span {
+    border-radius: 3px;
+  }
+  .b1 {
+    background: var(--t1);
+  }
+  .b2 {
+    background: var(--t5);
+  }
+  .b3 {
+    background: var(--t6);
+  }
+  .b4 {
+    background: var(--coral);
+  }
+  .b5 {
+    background: repeating-linear-gradient(135deg, var(--muted) 0 2px, transparent 2px 5px);
+  }
+  .b6 {
+    background: var(--raised);
+    box-shadow: 0 0 0 1px var(--border) inset;
+  }
+  .stack-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
+    margin: 0.7rem 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .stack-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .stack-legend i {
+    width: 9px;
+    height: 9px;
+    border-radius: 3px;
+  }
+  .stack-legend .sum {
+    margin-left: auto;
+    color: var(--mint-text);
+    font-weight: 600;
+  }
+
+  /* sunburst */
+  .viz-wrap {
+    width: min(210px, 70%);
+    margin: -0.25rem auto 0.5rem;
+  }
+
+  /* explanation */
+  .explain {
+    margin-top: 1.2rem;
+    padding: 0.9rem 1rem;
+    border-radius: 14px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+  }
+  .ex-h {
+    display: flex;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .card .ex-h {
+    margin: 0;
+    color: var(--text);
+  }
+  .ex-h b {
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .card .ex-b {
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1.2rem;
+  }
+  .chips span {
+    padding: 0.35rem 0.75rem;
+    border-radius: 99px;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    background: color-mix(in srgb, var(--mint) 12%, transparent);
+    color: var(--mint-text);
+  }
+  .chips .opt {
+    background: transparent;
+    color: var(--muted);
+    border: 1px dashed var(--border-strong);
+  }
+  .chips em {
+    font-style: normal;
+    font-family: var(--font);
+    opacity: 0.8;
+    margin-left: 0.25rem;
+  }
+
+  @media (max-width: 980px) {
+    .bento {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .f-scan {
+      grid-column: span 2;
+    }
+    .f-hidden,
+    .f-viz,
+    .f-explain,
+    .f-dev,
+    .f-small {
+      grid-column: span 1;
+    }
+  }
+  @media (max-width: 640px) {
+    .bento {
+      grid-template-columns: 1fr;
+    }
+    .f-scan {
+      grid-template-columns: 1fr;
+      grid-column: span 1;
+      gap: 1.4rem;
+    }
+  }
+</style>

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 380" width="1300" height="380" role="img" aria-label="Roomy">
+  <style>
+    .roomy-word { stroke: #14162B; }
+    @media (prefers-color-scheme: dark) { .roomy-word { stroke: #F2F3FA; } }
+  </style>
+  <defs>
+    <linearGradient id="roomy-logo-bg" x1="40" y1="24" x2="472" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B93FF"/>
+      <stop offset="1" stop-color="#6EE7C5"/>
+    </linearGradient>
+    <linearGradient id="roomy-logo-sheen" x1="256" y1="16" x2="256" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(10 40) scale(0.586)">
+    <rect x="16" y="16" width="480" height="480" rx="124" fill="url(#roomy-logo-bg)"/>
+    <rect x="16" y="16" width="480" height="480" rx="124" fill="url(#roomy-logo-sheen)"/>
+    <rect x="104" y="104" width="148" height="304" rx="40" fill="#14162B"/>
+    <rect x="270" y="104" width="138" height="138" rx="40" fill="#14162B"/>
+    <rect x="279" y="269" width="120" height="130" rx="34" fill="none" stroke="#14162B" stroke-opacity="0.42" stroke-width="18" stroke-dasharray="26 22" stroke-linecap="round"/>
+    <path d="M339 300 C342 324 346 328 370 334 C346 340 342 344 339 368 C336 344 332 340 308 334 C332 328 336 324 339 300 Z" fill="#14162B"/>
+  </g>
+  <g class="roomy-word" transform="translate(-40 0)" fill="none" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M425 252 V185 A65 65 0 0 1 490 120"/>
+    <circle cx="612" cy="186" r="66"/>
+    <circle cx="804" cy="186" r="66"/>
+    <path d="M922 252 V170 A50 50 0 0 1 1022 170 V252 M1022 170 A50 50 0 0 1 1122 170 V252"/>
+    <path d="M1182 120 V188 A50 50 0 0 0 1282 188 M1282 120 V282 A56 56 0 0 1 1226 338 H1204"/>
+  </g>
+</svg>

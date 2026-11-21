@@ -1,0 +1,310 @@
+---
+import Icon from "./Icon.astro";
+import { LINKS, SITE } from "../site";
+
+const xattr = "xattr -dr com.apple.quarantine /Applications/Roomy.app";
+---
+
+<section id="download" class="section download" aria-labelledby="download-title">
+  <div class="container">
+    <div class="section-head center">
+      <p class="eyebrow">Download</p>
+      <h2 id="download-title">Get Roomy. It's free.</h2>
+      <p>Version {SITE.version} for Windows and macOS. No account, no sign-up, no catch.</p>
+    </div>
+
+    <div class="platforms" id="install">
+      <article class="card plat plat-win" aria-labelledby="win-title">
+        <span class="yours">Your system</span>
+        <div class="plat-head">
+          <span class="os-icon"><Icon name="windows" size={26} /></span>
+          <div>
+            <h3 id="win-title">Windows</h3>
+            <p class="req">Windows 10 or 11 · 64-bit</p>
+          </div>
+        </div>
+        <a class="btn btn-primary dl" href={LINKS.windowsExe}>
+          <Icon name="download" size={18} /> Download installer (.exe)
+        </a>
+        <p class="alt">
+          Prefer an MSI? <a href={LINKS.windowsMsi}>Download Roomy-x64.msi</a>
+        </p>
+        <ol class="install">
+          <li>Run <code>Roomy-setup-x64.exe</code>. If WebView2 is missing, the installer adds it for you (Windows 11 already has it).</li>
+          <li>
+            Roomy isn't code-signed yet, so Windows may show a blue <strong>"Windows protected your PC"</strong> box.
+            Choose <strong>More info</strong>, then <strong>Run anyway</strong>.
+          </li>
+          <li>Open Roomy from the Start menu and pick a drive to scan.</li>
+        </ol>
+      </article>
+
+      <article class="card plat plat-mac" aria-labelledby="mac-title">
+        <span class="yours">Your system</span>
+        <div class="plat-head">
+          <span class="os-icon"><Icon name="apple" size={26} /></span>
+          <div>
+            <h3 id="mac-title">macOS</h3>
+            <p class="req">macOS 10.15 or newer · Apple silicon and Intel</p>
+          </div>
+        </div>
+        <a class="btn btn-primary dl" href={LINKS.macDmg}>
+          <Icon name="download" size={18} /> Download for Mac (.dmg)
+        </a>
+        <p class="alt">One universal build runs natively on every Mac.</p>
+        <ol class="install">
+          <li>Open <code>Roomy-macos.dmg</code> and drag Roomy into Applications.</li>
+          <li>
+            Roomy isn't notarized yet, so the first launch needs one extra step: <strong>right-click</strong> (or
+            Control-click) Roomy in Applications, choose <strong>Open</strong>, then <strong>Open</strong> again. On
+            newer macOS, use <strong>System Settings › Privacy &amp; Security › Open Anyway</strong>.
+          </li>
+          <li>
+            Still blocked? Clear the download flag in Terminal:
+            <span class="cmd">
+              <code set:html={xattr.replace("/Roomy", "/<wbr>Roomy")} />
+              <button type="button" class="copy" data-copy={xattr} aria-label="Copy command">
+                <Icon name="copy" size={15} />
+                <span class="copy-label">Copy</span>
+              </button>
+            </span>
+          </li>
+          <li>
+            For the most complete scan, give Roomy <strong>Full Disk Access</strong> in System Settings › Privacy &amp;
+            Security.
+          </li>
+        </ol>
+      </article>
+    </div>
+
+    <p class="foot-note">
+      <Icon name="shield" size={16} />
+      <span>
+        Why the warnings? Code-signing certificates cost money and Roomy is a free project. The source is{" "}
+        <a href={LINKS.github}>open on GitHub</a> if you'd rather read it or build it yourself. All versions are on{" "}
+        <a href={LINKS.releases}>Releases</a>. Linux isn't supported yet.
+      </span>
+    </p>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const label = btn.querySelector(".copy-label");
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy ?? "");
+        if (label) label.textContent = "Copied";
+      } catch {
+        if (label) label.textContent = "Select it";
+      }
+      setTimeout(() => {
+        if (label) label.textContent = "Copy";
+      }, 1800);
+    });
+  });
+</script>
+
+<style>
+  .download {
+    position: relative;
+  }
+  .download::before {
+    content: "";
+    position: absolute;
+    inset: 10% 0 auto;
+    height: 70%;
+    z-index: -1;
+    background: radial-gradient(50% 50% at 50% 40%, var(--glow-1), transparent 70%);
+    pointer-events: none;
+  }
+  .platforms {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+    align-items: start;
+    scroll-margin-top: 100px;
+  }
+  .plat {
+    display: flex;
+    flex-direction: column;
+    padding: clamp(1.5rem, 3vw, 2.2rem);
+    transition:
+      border-color 0.3s,
+      box-shadow 0.3s;
+  }
+  .yours {
+    display: none;
+    position: absolute;
+    top: 1.4rem;
+    right: 1.4rem;
+    padding: 0.2rem 0.7rem;
+    border-radius: 99px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--ink);
+    background: var(--grad);
+  }
+  :global([data-os="win"]) .plat-win,
+  :global([data-os="mac"]) .plat-mac {
+    border-color: color-mix(in srgb, var(--peri) 55%, var(--border));
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--peri) 30%, transparent),
+      0 30px 70px -40px rgb(139 147 255 / 0.55);
+  }
+  :global([data-os="win"]) .plat-win .yours,
+  :global([data-os="mac"]) .plat-mac .yours {
+    display: inline-block;
+  }
+  :global([data-os="mac"]) .plat-mac {
+    order: -1;
+  }
+  /* the non-detected platform keeps a quieter button */
+  :global([data-os="win"]) .plat-mac .dl,
+  :global([data-os="mac"]) .plat-win .dl {
+    color: var(--text);
+    background: var(--raised);
+    border-color: var(--border);
+    box-shadow: none;
+  }
+
+  .plat-head {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+  .os-icon {
+    display: grid;
+    place-items: center;
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+  }
+  .plat h3 {
+    font-size: 1.45rem;
+  }
+  .req {
+    margin-top: 0.2rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .dl {
+    margin-top: 1.6rem;
+    --h: 52px;
+  }
+  .alt {
+    margin-top: 0.7rem;
+    font-size: 0.875rem;
+    color: var(--muted);
+    text-align: center;
+  }
+  .alt a,
+  .foot-note a {
+    color: var(--accent-text);
+  }
+  .install {
+    margin: 1.6rem 0 0;
+    padding: 1.4rem 0 0;
+    border-top: 1px solid var(--border);
+    list-style: none;
+    counter-reset: i;
+    display: grid;
+    gap: 0.95rem;
+  }
+  .install li {
+    position: relative;
+    padding-left: 2.3rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    counter-increment: i;
+  }
+  .install li::before {
+    content: counter(i);
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: grid;
+    place-items: center;
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 8px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 0.78rem;
+    font-weight: 650;
+  }
+  .install strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .install code {
+    padding: 0.08rem 0.35rem;
+    border-radius: 6px;
+    background: var(--raised);
+    color: var(--text);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+  .cmd {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+    padding: 0.5rem 0.5rem 0.5rem 0.85rem;
+    border-radius: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  .cmd code {
+    flex: 1;
+    padding: 0;
+    background: none;
+    font-size: 0.8rem;
+    overflow-wrap: normal;
+    line-height: 1.5;
+  }
+  .copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex: none;
+    height: 32px;
+    padding: 0 0.7rem;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--raised);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 560;
+    cursor: pointer;
+  }
+  .copy:hover {
+    border-color: var(--border-strong);
+  }
+  .foot-note {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+    justify-content: center;
+    max-width: 720px;
+    margin: 2rem auto 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .foot-note :global(svg) {
+    flex: none;
+    margin-top: 0.2rem;
+    color: var(--mint-text);
+  }
+
+  @media (max-width: 860px) {
+    .platforms {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

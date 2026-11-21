@@ -1,0 +1,140 @@
+<!doctype html>
+<!-- Source for public/og.png. Open at 1200x630, screenshot to scripts/og-raw.png, then run scripts/icons.mjs. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Roomy OG card</title>
+    <style>
+      @font-face {
+        font-family: "Inter";
+        src: url("../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2");
+        font-weight: 100 900;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body {
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+        font-family: Inter, system-ui, sans-serif;
+        color: #f2f3fa;
+        background:
+          radial-gradient(45% 60% at 18% 20%, rgb(139 147 255 / 0.22), transparent 70%),
+          radial-gradient(40% 55% at 85% 80%, rgb(110 231 197 / 0.14), transparent 70%),
+          #0b0c16;
+        display: grid;
+        grid-template-columns: 520px 1fr;
+        align-items: center;
+        gap: 40px;
+        padding: 0 60px 0 76px;
+      }
+      .logo { display: flex; align-items: center; gap: 16px; }
+      .logo .word { height: 40px; width: auto; margin-top: 8px; }
+      h1 {
+        margin: 46px 0 0;
+        font-size: 112px;
+        line-height: 0.95;
+        letter-spacing: -0.05em;
+        font-weight: 700;
+      }
+      h1 span {
+        background: linear-gradient(135deg, #8b93ff, #6ee7c5);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      p {
+        margin: 26px 0 0;
+        font-size: 27px;
+        line-height: 1.4;
+        color: #9aa0b8;
+        letter-spacing: -0.01em;
+      }
+      .tm {
+        position: relative;
+        height: 430px;
+        border-radius: 30px;
+        padding: 14px;
+        background: #11131f;
+        border: 1px solid #23273b;
+        box-shadow: 0 40px 90px -30px rgb(0 0 0 / 0.8);
+      }
+      .tm .in { position: relative; height: 100%; }
+      .c { position: absolute; padding: 4px; }
+      .t {
+        height: 100%;
+        border-radius: 16px;
+        padding: 14px 16px;
+        color: #14162b;
+        font-weight: 640;
+        font-size: 16px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        background-image: linear-gradient(160deg, rgb(255 255 255 / 0.28), transparent 55%);
+      }
+      .t small { display: block; font-weight: 500; opacity: 0.7; font-size: 14px; margin-top: 2px; }
+      .freed {
+        height: 100%;
+        border-radius: 16px;
+        border: 3px dashed rgb(110 231 197 / 0.75);
+        background: rgb(110 231 197 / 0.08);
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 4px;
+        color: #6ee7c5;
+        font-weight: 650;
+        font-size: 18px;
+      }
+      .res {
+        height: 100%;
+        border-radius: 16px;
+        background: repeating-linear-gradient(135deg, rgb(154 160 184 / 0.3) 0 4px, transparent 4px 10px), #181b2b;
+        border: 1px solid #23273b;
+      }
+    </style>
+  </head>
+  <body>
+    <div>
+      <div class="logo">
+        <svg width="56" height="56" viewBox="16 16 480 480">
+          <defs>
+            <linearGradient id="bg" x1="40" y1="24" x2="472" y2="488" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#8B93FF"/><stop offset="1" stop-color="#6EE7C5"/></linearGradient>
+            <linearGradient id="sh" x1="256" y1="16" x2="256" y2="300" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity="0.28"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+          </defs>
+          <rect x="16" y="16" width="480" height="480" rx="124" fill="url(#bg)"/>
+          <rect x="16" y="16" width="480" height="480" rx="124" fill="url(#sh)"/>
+          <rect x="104" y="104" width="148" height="304" rx="40" fill="#14162B"/>
+          <rect x="270" y="104" width="138" height="138" rx="40" fill="#14162B"/>
+          <rect x="279" y="269" width="120" height="130" rx="34" fill="none" stroke="#14162B" stroke-opacity="0.42" stroke-width="18" stroke-dasharray="26 22" stroke-linecap="round"/>
+          <path d="M339 300 C342 324 346 328 370 334 C346 340 342 344 339 368 C336 344 332 340 308 334 C332 328 336 324 339 300 Z" fill="#14162B"/>
+        </svg>
+        <svg class="word" viewBox="405 102 897 254">
+          <g fill="none" stroke="#F2F3FA" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M425 252 V185 A65 65 0 0 1 490 120"/>
+            <circle cx="612" cy="186" r="66"/>
+            <circle cx="804" cy="186" r="66"/>
+            <path d="M922 252 V170 A50 50 0 0 1 1022 170 V252 M1022 170 A50 50 0 0 1 1122 170 V252"/>
+            <path d="M1182 120 V188 A50 50 0 0 0 1282 188 M1282 120 V282 A56 56 0 0 1 1226 338 H1204"/>
+          </g>
+        </svg>
+      </div>
+      <h1>Make <span>room.</span></h1>
+      <p>See every gigabyte on your drive, nothing hidden. Clear space safely. Free for Windows and macOS.</p>
+    </div>
+    <div class="tm">
+      <div class="in">
+        <div class="c" style="left:0;top:0;width:48%;height:38%"><div class="t" style="background-color:#6f78f0">Videos<small>64 GB</small></div></div>
+        <div class="c" style="left:0;top:38%;width:19%;height:62%"><div class="t" style="background-color:#4fc9a8">Code<small>52 GB</small></div></div>
+        <div class="c" style="left:19%;top:38%;width:29%;height:34%"><div class="t" style="background-color:#a7adff">Photos<small>38 GB</small></div></div>
+        <div class="c" style="left:19%;top:72%;width:29%;height:28%"><div class="t" style="background-color:#6ee7c5">Downloads<small>32 GB</small></div></div>
+        <div class="c" style="left:48%;top:0;width:30%;height:62%"><div class="t" style="background-color:#8b93ff">Applications<small>78 GB</small></div></div>
+        <div class="c" style="left:78%;top:0;width:22%;height:62%"><div class="t" style="background-color:#6ee7c5">Games<small>54 GB</small></div></div>
+        <div class="c" style="left:48%;top:62%;width:24%;height:38%"><div class="t" style="background-color:#3b416b;color:#f2f3fa">System<small>36 GB</small></div></div>
+        <div class="c" style="left:72%;top:62%;width:17%;height:38%"><div class="freed"><span style="font-size:26px">✦</span><span>22 GB</span><span style="color:#9aa0b8;font-weight:500;font-size:14px">freed</span></div></div>
+        <div class="c" style="left:89%;top:62%;width:11%;height:38%"><div class="res"></div></div>
+      </div>
+    </div>
+  </body>
+</html>

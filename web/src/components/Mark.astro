@@ -1,0 +1,39 @@
+---
+// Roomy app mark (from brand/mark.svg). Gradient ids are namespaced per use.
+interface Props {
+  size?: number;
+  id?: string;
+  class?: string;
+  title?: string;
+}
+const { size = 32, id = "m", class: cls, title } = Astro.props;
+const bg = `roomy-bg-${id}`;
+const sheen = `roomy-sheen-${id}`;
+---
+
+<svg
+  class={cls}
+  width={size}
+  height={size}
+  viewBox="16 16 480 480"
+  role={title ? "img" : undefined}
+  aria-hidden={title ? undefined : "true"}
+  aria-label={title}
+>
+  <defs>
+    <linearGradient id={bg} x1="40" y1="24" x2="472" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B93FF"></stop>
+      <stop offset="1" stop-color="#6EE7C5"></stop>
+    </linearGradient>
+    <linearGradient id={sheen} x1="256" y1="16" x2="256" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"></stop>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"></stop>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="124" fill={`url(#${bg})`}></rect>
+  <rect x="16" y="16" width="480" height="480" rx="124" fill={`url(#${sheen})`}></rect>
+  <rect x="104" y="104" width="148" height="304" rx="40" fill="#14162B"></rect>
+  <rect x="270" y="104" width="138" height="138" rx="40" fill="#14162B"></rect>
+  <rect x="279" y="269" width="120" height="130" rx="34" fill="none" stroke="#14162B" stroke-opacity="0.42" stroke-width="18" stroke-dasharray="26 22" stroke-linecap="round"></rect>
+  <path d="M339 300 C342 324 346 328 370 334 C346 340 342 344 339 368 C336 344 332 340 308 334 C332 328 336 324 339 300 Z" fill="#14162B"></path>
+</svg>

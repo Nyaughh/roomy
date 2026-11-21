@@ -1,0 +1,930 @@
+---
+// Stylized, animated mock of the Roomy window: a scan completes, the treemap fills in,
+// safe cleanups get ticked, and the "Caches & temp" block turns into freshly made room.
+// Built entirely in HTML/CSS so it stays crisp, themeable and light.
+import Icon from "./Icon.astro";
+import Mark from "./Mark.astro";
+
+type Tile = {
+  name: string;
+  winName?: string;
+  macName?: string;
+  gb: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  tone: string;
+  kind?: "clean" | "reserved";
+  sub?: { name: string; gb: number; h: number };
+};
+
+// Hand-squarified layout of a 512 GB drive: 390 GB used, 122 GB free (percent of the treemap area).
+const tiles: Tile[] = [
+  { name: "Videos", gb: 64, x: 0, y: 0, w: 47.7, h: 34.4, tone: "t1" },
+  { name: "Projects", gb: 52, x: 0, y: 34.4, w: 20.3, h: 65.6, tone: "t4", sub: { name: "node_modules", gb: 14, h: 30 } },
+  { name: "Photos", gb: 38, x: 20.3, y: 34.4, w: 27.4, h: 35.6, tone: "t3" },
+  { name: "Downloads", gb: 32, x: 20.3, y: 70, w: 27.4, h: 30, tone: "t5" },
+  { name: "Applications", winName: "Program Files", macName: "Applications", gb: 78, x: 47.7, y: 0, w: 30.9, h: 64.7, tone: "t2" },
+  { name: "Games", gb: 54, x: 78.6, y: 0, w: 21.4, h: 64.7, tone: "t5" },
+  { name: "System", winName: "Windows", macName: "System", gb: 36, x: 47.7, y: 64.7, w: 26.2, h: 35.3, tone: "t6" },
+  { name: "Caches & temp", gb: 22, x: 73.9, y: 64.7, w: 16.0, h: 35.3, tone: "tc", kind: "clean" },
+  { name: "Reserved", gb: 14, x: 89.9, y: 64.7, w: 10.1, h: 35.3, tone: "tr", kind: "reserved" },
+];
+
+// Drive usage bar, percent of the whole 512 GB disk.
+const segments = [
+  { label: "Your files", gb: 186, cls: "s-files" },
+  { label: "Apps & games", gb: 132, cls: "s-apps" },
+  { label: "System", gb: 36, cls: "s-system" },
+  { label: "Caches & temp", gb: 22, cls: "s-clean" },
+  { label: "Reserved & hidden", gb: 14, cls: "s-reserved" },
+];
+const TOTAL = 512;
+
+const suggestions = [
+  { name: "Package caches", note: "Re-downloaded when needed", gb: "9.2" },
+  { name: "Temporary files", note: "Left behind by apps", gb: "6.4" },
+  { name: "Browser caches", note: "Rebuilt as you browse", gb: "4.6" },
+  { name: "Crash dumps & logs", note: "Old diagnostic files", gb: "1.8" },
+];
+const optIn = [
+  { name: "Old node_modules", note: "3 projects untouched for 6 months", gb: "14.0" },
+  { name: "Duplicate files", note: "212 identical copies", gb: "2.3" },
+];
+---
+
+<div class="mock armed" data-mock role="img" aria-label="Preview of the Roomy app: a treemap of a 512 gigabyte drive where every block is labeled, including system-reserved space, and a list of suggested cleanups totalling 22 gigabytes, which get cleared.">
+  <div class="win" aria-hidden="true">
+    <div class="titlebar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="title"><Mark size={14} id="tb" /> Roomy</span>
+      <span class="tb-right"></span>
+    </div>
+
+    <div class="body">
+      <aside class="side">
+        <p class="side-h">Drives</p>
+        <div class="drive active">
+          <span class="drive-name"><span class="os-win">Local Disk (C:)</span><span class="os-mac">Macintosh HD</span></span>
+          <span class="drive-bar"><span></span></span>
+          <span class="drive-meta">512 GB</span>
+        </div>
+        <div class="drive">
+          <span class="drive-name"><span class="os-win">Data (D:)</span><span class="os-mac">Backup</span></span>
+          <span class="drive-bar small"><span></span></span>
+          <span class="drive-meta">1 TB</span>
+        </div>
+        <p class="side-h">Views</p>
+        <ul class="nav">
+          <li class="active"><span class="ico sq"></span>Treemap</li>
+          <li><span class="ico ring"></span>Sunburst</li>
+          <li><span class="ico lst"></span>Largest files</li>
+          <li><span class="ico sp"></span>Cleanup <b>22 GB</b></li>
+          <li><span class="ico dup"></span>Duplicates</li>
+        </ul>
+      </aside>
+
+      <section class="main">
+        <div class="head">
+          <div>
+            <p class="drive-title"><span class="os-win">Local Disk (C:)</span><span class="os-mac">Macintosh HD</span></p>
+            <p class="status">
+              <span class="st scanning"><i class="spinner"></i>Scanning…</span>
+              <span class="st done"><Icon name="check" size={13} />Scan complete · 100% accounted for</span>
+            </p>
+          </div>
+          <p class="free">
+            <span class="f before"><b>122 GB</b> free</span>
+            <span class="f after"><b>144 GB</b> free</span>
+          </p>
+        </div>
+
+        <div class="usage">
+          {segments.map((s, i) => (
+            <span class={`seg ${s.cls}`} style={`--w:${((s.gb / TOTAL) * 100).toFixed(2)}%; --i:${i}`} />
+          ))}
+          <span class="seg s-free" />
+        </div>
+        <ul class="legend">
+          {segments.map((s) => (
+            <li><i class={s.cls}></i>{s.label}</li>
+          ))}
+          <li><i class="s-free"></i>Free</li>
+        </ul>
+
+        <div class="content">
+          <div class="treemap">
+            {tiles.map((t, i) => (
+              <div
+                class:list={["cell", t.kind]}
+                style={`left:${t.x}%;top:${t.y}%;width:${t.w}%;height:${t.h}%;--i:${i}`}
+              >
+                <div class={`tile ${t.tone}`}>
+                  <span class="t-name">
+                    {t.winName ? (
+                      <>
+                        <span class="os-win">{t.winName}</span>
+                        <span class="os-mac">{t.macName}</span>
+                      </>
+                    ) : (
+                      t.name
+                    )}
+                  </span>
+                  <span class="t-size">{t.gb} GB</span>
+                  {t.sub && (
+                    <span class="sub" style={`height:${t.sub.h}%`}>
+                      <span class="t-name">{t.sub.name}</span>
+                      <span class="t-size">{t.sub.gb} GB</span>
+                    </span>
+                  )}
+                </div>
+                {t.kind === "clean" && (
+                  <div class="freed">
+                    <Icon name="sparkle" size={22} />
+                    <span class="t-name">22 GB</span>
+                    <span class="t-size">made room</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div class="panel">
+            <div class="panel-h">
+              <p>Suggested cleanups</p>
+              <span class="pill">Safe</span>
+            </div>
+            <ul class="sugg">
+              {suggestions.map((s, i) => (
+                <li style={`--i:${i}`}>
+                  <span class="box"><Icon name="check" size={11} /></span>
+                  <span class="s-text">
+                    <span class="s-name">{s.name}</span>
+                    <span class="s-note">{s.note}</span>
+                  </span>
+                  <span class="s-gb">{s.gb} GB</span>
+                </li>
+              ))}
+            </ul>
+            <p class="opt-h">Opt-in · your own files</p>
+            <ul class="sugg opt">
+              {optIn.map((s) => (
+                <li>
+                  <span class="box"></span>
+                  <span class="s-text">
+                    <span class="s-name">{s.name}</span>
+                    <span class="s-note">{s.note}</span>
+                  </span>
+                  <span class="s-gb">{s.gb} GB</span>
+                </li>
+              ))}
+            </ul>
+            <div class="cta">
+              <span class="c before">Review 22.0 GB</span>
+              <span class="c after"><Icon name="check" size={14} />22.0 GB cleared</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Start the scan animation when the mock scrolls into view (it may sit below the fold on phones).
+  const mock = document.querySelector<HTMLElement>("[data-mock]");
+  if (mock) {
+    if (!("IntersectionObserver" in window)) {
+      mock.classList.add("play");
+    } else {
+      const io = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            mock.classList.add("play");
+            io.disconnect();
+          }
+        },
+        { threshold: 0.4 },
+      );
+      io.observe(mock);
+    }
+  }
+</script>
+
+<style>
+  .mock {
+    --gap: 3px;
+    position: relative;
+    font-size: 12px;
+    line-height: 1.3;
+    letter-spacing: 0;
+    user-select: none;
+  }
+  .mock.armed:not(.play) *,
+  .mock.armed:not(.play) *::before,
+  .mock.armed:not(.play) *::after {
+    animation-play-state: paused !important;
+  }
+
+  /* OS-aware labels inside the mock */
+  .os-mac {
+    display: none;
+  }
+  :global([data-os="mac"]) .os-mac {
+    display: inline;
+  }
+  :global([data-os="mac"]) .os-win {
+    display: none;
+  }
+
+  .win {
+    position: relative;
+    border-radius: 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .win::before {
+    /* soft top highlight */
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.14), transparent);
+  }
+
+  .titlebar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    height: 40px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .dots {
+    display: flex;
+    gap: 7px;
+  }
+  .dots i {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--border-strong);
+  }
+  .dots i:first-child {
+    background: var(--coral);
+    opacity: 0.85;
+  }
+  .title {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 600;
+    font-size: 12px;
+  }
+
+  .body {
+    display: grid;
+    grid-template-columns: 188px 1fr;
+    min-height: 0;
+  }
+
+  /* ---------- sidebar ---------- */
+  .side {
+    padding: 16px 12px;
+    border-right: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 60%, var(--bg));
+  }
+  .side-h {
+    margin: 4px 6px 8px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    opacity: 0.8;
+  }
+  .side-h:not(:first-child) {
+    margin-top: 18px;
+  }
+  .drive {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px 8px;
+    padding: 9px 10px;
+    border-radius: 12px;
+    margin-bottom: 4px;
+  }
+  .drive.active {
+    background: var(--raised);
+    box-shadow: 0 0 0 1px var(--border) inset;
+  }
+  .drive-name {
+    font-weight: 560;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .drive-meta {
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .drive-bar {
+    grid-column: 1 / -1;
+    height: 5px;
+    border-radius: 99px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .drive-bar span {
+    display: block;
+    height: 100%;
+    width: 76%;
+    border-radius: inherit;
+    background: var(--grad);
+    animation: drive-free 0.8s var(--ease) 4.4s both;
+  }
+  .drive-bar.small span {
+    width: 41%;
+    animation: none;
+    opacity: 0.6;
+  }
+  @keyframes drive-free {
+    from {
+      width: 76%;
+    }
+    to {
+      width: 72%;
+    }
+  }
+  .nav {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .nav li {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 10px;
+    border-radius: 10px;
+    color: var(--muted);
+  }
+  .nav li.active {
+    color: var(--text);
+    background: var(--raised);
+  }
+  .nav b {
+    margin-left: auto;
+    font-weight: 600;
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 99px;
+    color: var(--coral-text);
+    background: color-mix(in srgb, var(--coral) 14%, transparent);
+  }
+  .ico {
+    width: 13px;
+    height: 13px;
+    border-radius: 4px;
+    border: 1.6px solid currentColor;
+    flex: none;
+  }
+  .ico.sq {
+    background: linear-gradient(90deg, currentColor 50%, transparent 50%);
+    border-color: currentColor;
+  }
+  .ico.ring {
+    border-radius: 50%;
+    border-width: 3px;
+    border-right-color: transparent;
+  }
+  .ico.lst {
+    border: 0;
+    border-radius: 0;
+    background: repeating-linear-gradient(currentColor 0 2px, transparent 2px 5px);
+  }
+  .ico.sp {
+    border-radius: 50%;
+    border-style: dashed;
+  }
+  .ico.dup {
+    box-shadow: 3px -3px 0 -1.6px currentColor;
+  }
+
+  /* ---------- main ---------- */
+  .main {
+    padding: 18px 20px 20px;
+    min-width: 0;
+  }
+  .head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .drive-title {
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+  .status {
+    display: grid;
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  .st {
+    grid-area: 1 / 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .st.scanning {
+    animation: fade-out 0.3s ease 1.5s both;
+  }
+  .st.done {
+    color: var(--mint-text);
+    animation: fade-in 0.4s ease 1.6s both;
+  }
+  .spinner {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--peri);
+    animation: spin 0.8s linear infinite;
+  }
+  .free {
+    display: grid;
+    text-align: right;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .free b {
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+  .f {
+    grid-area: 1 / 1;
+  }
+  .f.before {
+    animation: fade-out 0.35s ease 4.3s both;
+  }
+  .f.after {
+    animation: pop-in 0.5s var(--ease) 4.4s both;
+  }
+  .f.after b {
+    color: var(--mint-text);
+  }
+
+  .usage {
+    display: flex;
+    gap: 2px;
+    height: 12px;
+    margin-top: 14px;
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .seg {
+    width: var(--w);
+    flex: none;
+    border-radius: 3px;
+    transform-origin: left;
+    animation: grow-x 0.9s var(--ease) calc(0.15s + var(--i) * 0.08s) both;
+  }
+  .seg.s-free {
+    flex: 1;
+    width: auto;
+    animation: none;
+  }
+  .s-files {
+    background: var(--t1);
+  }
+  .s-apps {
+    background: var(--t5);
+  }
+  .s-system {
+    background: var(--t6);
+  }
+  .s-clean {
+    background: var(--coral);
+  }
+  .seg.s-clean {
+    animation:
+      grow-x 0.9s var(--ease) 0.39s both,
+      collapse 0.8s var(--ease) 4.3s forwards;
+  }
+  .s-reserved {
+    background: repeating-linear-gradient(135deg, var(--muted) 0 2px, transparent 2px 5px);
+    opacity: 0.8;
+  }
+  .s-free {
+    background: var(--raised);
+    box-shadow: 0 0 0 1px var(--border) inset;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    list-style: none;
+    margin: 9px 0 0;
+    padding: 0;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend i {
+    width: 8px;
+    height: 8px;
+    border-radius: 3px;
+  }
+
+  .content {
+    display: grid;
+    grid-template-columns: 1fr 248px;
+    gap: 14px;
+    margin-top: 16px;
+  }
+
+  /* ---------- treemap ---------- */
+  .treemap {
+    position: relative;
+    min-height: 352px;
+    margin: calc(var(--gap) * -1);
+  }
+  .cell {
+    position: absolute;
+    padding: var(--gap);
+  }
+  .tile {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 9px 10px;
+    border-radius: 12px;
+    overflow: hidden;
+    color: var(--ink);
+    animation: tile-in 0.7s var(--ease) calc(0.35s + var(--i) * 0.07s) both;
+    transition:
+      filter 0.2s,
+      transform 0.25s var(--ease);
+  }
+  .tile::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(160deg, rgb(255 255 255 / 0.28), transparent 55%);
+    pointer-events: none;
+  }
+  .cell:hover .tile {
+    filter: brightness(1.08) saturate(1.05);
+  }
+  .t-name {
+    font-weight: 620;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .t-size {
+    opacity: 0.8;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .t1 {
+    background: var(--t1);
+  }
+  .t2 {
+    background: var(--t2);
+  }
+  .t3 {
+    background: var(--t3);
+  }
+  .t4 {
+    background: var(--t4);
+  }
+  .t5 {
+    background: var(--t5);
+  }
+  .t6 {
+    background: var(--t6);
+    color: var(--text);
+  }
+  :global([data-theme="light"]) .t6 {
+    color: var(--ink);
+  }
+  .tc {
+    background: var(--coral);
+  }
+  .tr {
+    background:
+      repeating-linear-gradient(135deg, rgb(154 160 184 / 0.28) 0 3px, transparent 3px 8px),
+      var(--raised);
+    color: var(--muted);
+    box-shadow: 0 0 0 1px var(--border) inset;
+  }
+  .tr::after {
+    display: none;
+  }
+  .reserved .t-name {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    margin-top: auto;
+    order: 2;
+  }
+  .reserved .t-size {
+    order: 1;
+  }
+  .sub {
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    bottom: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 7px 8px;
+    border-radius: 9px;
+    background: rgb(20 22 43 / 0.16);
+    box-shadow: 0 0 0 1px rgb(20 22 43 / 0.12) inset;
+  }
+
+  /* the cleaned block becomes freshly made room */
+  .clean .tile {
+    animation:
+      tile-in 0.7s var(--ease) calc(0.35s + var(--i) * 0.07s) both,
+      vanish 0.6s var(--ease) 4.2s forwards;
+  }
+  .freed {
+    position: absolute;
+    inset: var(--gap);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    text-align: center;
+    border-radius: 12px;
+    border: 2px dashed color-mix(in srgb, var(--mint) 70%, transparent);
+    color: var(--mint-text);
+    background: color-mix(in srgb, var(--mint) 7%, transparent);
+    animation: pop-in 0.6s var(--ease) 4.5s both;
+  }
+  .freed svg {
+    animation: twinkle 2.4s ease-in-out 5.2s infinite;
+  }
+  .freed .t-size {
+    color: var(--muted);
+    opacity: 1;
+  }
+
+  /* ---------- suggestions panel ---------- */
+  .panel {
+    display: flex;
+    flex-direction: column;
+    padding: 14px;
+    border-radius: 16px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+  }
+  .panel-h {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .panel-h p {
+    font-weight: 620;
+    font-size: 12.5px;
+  }
+  .pill {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 99px;
+    color: var(--mint-text);
+    background: color-mix(in srgb, var(--mint) 14%, transparent);
+  }
+  .sugg {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .sugg li {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 4px;
+  }
+  .s-text {
+    display: grid;
+    min-width: 0;
+  }
+  .s-name {
+    font-weight: 560;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .s-note {
+    font-size: 10.5px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .s-gb {
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .box {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 5px;
+    border: 1.5px solid var(--border-strong);
+    color: var(--ink);
+  }
+  .sugg:not(.opt) .box {
+    animation: check-on 0.35s var(--ease) calc(2.2s + var(--i) * 0.28s) both;
+  }
+  .sugg:not(.opt) .box svg {
+    animation: pop-in 0.35s var(--ease) calc(2.25s + var(--i) * 0.28s) both;
+  }
+  .opt-h {
+    margin: 10px 4px 0;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+  .opt {
+    margin-top: 4px;
+    opacity: 0.7;
+  }
+  .cta {
+    display: grid;
+    margin-top: auto;
+    padding-top: 12px;
+  }
+  .c {
+    grid-area: 1 / 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 34px;
+    border-radius: 10px;
+    font-weight: 620;
+  }
+  .c.before {
+    color: var(--ink);
+    background: var(--grad);
+    animation: press-out 0.45s var(--ease) 3.7s both;
+  }
+  .c.after {
+    color: var(--mint-text);
+    background: color-mix(in srgb, var(--mint) 12%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--mint) 30%, transparent) inset;
+    animation: pop-in 0.45s var(--ease) 4.1s both;
+  }
+
+  /* ---------- keyframes ---------- */
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.85);
+    }
+  }
+  @keyframes grow-x {
+    from {
+      transform: scaleX(0);
+    }
+  }
+  @keyframes collapse {
+    to {
+      width: 0;
+      margin-left: -2px;
+    }
+  }
+  @keyframes tile-in {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+  @keyframes vanish {
+    to {
+      opacity: 0;
+      transform: scale(0.94);
+    }
+  }
+  @keyframes check-on {
+    to {
+      background: var(--mint);
+      border-color: var(--mint);
+    }
+  }
+  @keyframes press-out {
+    40% {
+      transform: scale(0.96);
+      opacity: 1;
+    }
+    to {
+      transform: scale(0.96);
+      opacity: 0;
+    }
+  }
+  @keyframes twinkle {
+    0%,
+    100% {
+      transform: scale(1) rotate(0);
+    }
+    50% {
+      transform: scale(1.15) rotate(12deg);
+    }
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1000px) {
+    .body {
+      grid-template-columns: 1fr;
+    }
+    .side {
+      display: none;
+    }
+  }
+  @media (max-width: 760px) {
+    .content {
+      grid-template-columns: 1fr;
+    }
+    .treemap {
+      min-height: 260px;
+    }
+    .opt-h,
+    .opt {
+      display: none;
+    }
+    .sugg li:nth-child(n + 4) {
+      display: none;
+    }
+    .main {
+      padding: 14px;
+    }
+    .mock {
+      --gap: 2px;
+      font-size: 11px;
+    }
+    .tile {
+      padding: 7px 8px;
+      border-radius: 9px;
+    }
+    .sub {
+      display: none;
+    }
+  }
+  @media (max-width: 480px) {
+    .legend li:nth-child(n + 3):not(:last-child) {
+      display: none;
+    }
+    .reserved .t-size,
+    .clean .t-size {
+      display: none;
+    }
+    .free b {
+      font-size: 13px;
+    }
+  }
+</style>

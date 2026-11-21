@@ -1,0 +1,201 @@
+---
+import Icon from "./Icon.astro";
+
+const steps = [
+  {
+    n: "1",
+    title: "Roomy suggests",
+    body: "It only suggests well-known clutter: temp files, caches, crash dumps, the Recycle Bin. Things your own work lives in, like duplicates and project folders, are opt-in and never pre-selected.",
+  },
+  {
+    n: "2",
+    title: "It explains",
+    body: "Each item says, in plain words, what it is, why it's there, and whether it comes back on its own. No jargon, no scary percentages.",
+  },
+  {
+    n: "3",
+    title: "You review",
+    body: "Before anything happens you see a final list: every item, its size, and exactly how it will be removed. Nothing is touched until you confirm.",
+  },
+  {
+    n: "4",
+    title: "It cleans, gently",
+    body: "Files you pick go to the Recycle Bin or Trash by default, so you can change your mind. Caches and temp files are deleted for real, since binning them would free nothing.",
+  },
+];
+
+const rails = [
+  { icon: "lock", text: "Critical system folders are hard-blocked. Roomy simply won't delete them." },
+  { icon: "undo", text: "Recycle Bin or Trash by default for your own files. Permanent delete is a separate, confirmed action." },
+  { icon: "check", text: "Nothing is ever pre-selected that holds your own content." },
+  { icon: "wifi-off", text: "Works fully offline. Your file list never leaves your computer." },
+] as const;
+---
+
+<section id="safety" class="section safety" aria-labelledby="safety-title">
+  <div class="container">
+    <div class="section-head">
+      <p class="eyebrow">How safe cleanup works</p>
+      <h2 id="safety-title">Cleaning up shouldn't feel like defusing a bomb.</h2>
+      <p>
+        Roomy is careful by design. You always know what will be removed, how it will be removed, and how to get it
+        back.
+      </p>
+    </div>
+
+    <ol class="steps">
+      {steps.map((s) => (
+        <li class="card step">
+          <span class="num" aria-hidden="true">{s.n}</span>
+          <h3>{s.title}</h3>
+          <p>{s.body}</p>
+        </li>
+      ))}
+    </ol>
+
+    <div class="rails card">
+      <div class="rails-head">
+        <span class="shield"><Icon name="shield" size={26} /></span>
+        <div>
+          <h3>Safety rails, always on</h3>
+          <p>Guardrails you can't accidentally switch off.</p>
+        </div>
+      </div>
+      <ul>
+        {rails.map((r) => (
+          <li>
+            <span class="ri"><Icon name={r.icon} size={17} /></span>
+            {r.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<style>
+  .safety {
+    position: relative;
+  }
+  .steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    counter-reset: step;
+  }
+  .step {
+    padding: 1.6rem;
+  }
+  .step:not(:last-child)::after {
+    /* connector between steps */
+    content: "";
+    position: absolute;
+    top: 2.55rem;
+    right: -1rem;
+    width: 1rem;
+    height: 2px;
+    background: linear-gradient(90deg, var(--border-strong), transparent);
+  }
+  .num {
+    display: inline-grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    background: var(--grad);
+    color: var(--ink);
+    font-weight: 700;
+  }
+  .step h3 {
+    margin-top: 1.1rem;
+    font-size: 1.15rem;
+  }
+  .step p {
+    margin-top: 0.55rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+
+  .rails {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.8fr) 2fr;
+    gap: 2rem;
+    align-items: center;
+    margin-top: 1rem;
+    padding: clamp(1.5rem, 3vw, 2.2rem);
+    background:
+      radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--mint) 9%, transparent), transparent 60%),
+      var(--surface);
+  }
+  .rails-head {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+  .shield {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    color: var(--mint-text);
+    background: color-mix(in srgb, var(--mint) 13%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--mint) 25%, transparent) inset;
+  }
+  .rails h3 {
+    font-size: 1.2rem;
+  }
+  .rails-head p {
+    margin-top: 0.3rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+  .rails ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.9rem 1.6rem;
+  }
+  .rails li {
+    display: flex;
+    gap: 0.7rem;
+    align-items: flex-start;
+    font-size: 0.95rem;
+    color: var(--text);
+  }
+  .ri {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    color: var(--accent-text);
+    background: var(--raised);
+    border: 1px solid var(--border);
+  }
+
+  @media (max-width: 1000px) {
+    .steps {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .step::after {
+      display: none;
+    }
+    .rails {
+      grid-template-columns: 1fr;
+    }
+  }
+  @media (max-width: 600px) {
+    .steps,
+    .rails ul {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
