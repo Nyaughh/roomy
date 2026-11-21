@@ -11,7 +11,7 @@ const steps = [
   },
   {
     t: "You review.",
-    b: "A final list shows each item, its size and exactly how it will be removed. Nothing happens until you confirm.",
+    b: "Before a suggested clean-up runs, a final list shows each item, its size and exactly how it will be removed. Nothing in it is touched until you confirm.",
   },
   {
     t: "It cleans.",
@@ -29,7 +29,7 @@ const review = [
 
 const rails = [
   { t: "System folders are off-limits.", b: "Critical system paths are hard-blocked. Roomy won't delete them, whatever you select." },
-  { t: "The bin is the default.", b: "Files and folders you delete from a view go to the Recycle Bin or Trash. Deleting permanently is a separate, confirmed action." },
+  { t: "The bin is the default.", b: "Delete a single file or folder from a view and it goes straight to the Recycle Bin or Trash, ready to restore. Several items at once, or a permanent delete, ask you to confirm first." },
   { t: "Nothing of yours is pre-selected.", b: "Duplicates, project folders and the bin itself are opt-in, every time." },
   { t: "Offline, always.", b: "No telemetry, no network calls. Your file list stays on your computer." },
 ];
@@ -40,7 +40,7 @@ const rails = [
     <div class="section-head">
       <p class="kicker">Safe clean-up</p>
       <h2 id="safety-title" class="title-1">Clear space without the second-guessing.</h2>
-      <p class="lead">You always know what will be removed, how it will be removed, and what you can get back.</p>
+      <p class="lead">You know what will be removed, how it will be removed, and what you can get back.</p>
     </div>
 
     <div class="cols">
@@ -77,7 +77,7 @@ const rails = [
           <span class="btn btn-secondary btn-sm fake">Cancel</span>
           <span class="btn btn-primary btn-sm fake">Clean up <span class="num">24.3 GB</span></span>
         </div>
-        <figcaption>The last step before anything is removed.</figcaption>
+        <figcaption>The last step before a suggested clean-up runs.</figcaption>
       </figure>
     </div>
 

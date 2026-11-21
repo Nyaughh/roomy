@@ -51,12 +51,18 @@ const parts = [
 
     <div class="hidden-list">
       <h3 class="title-3">What's in "Hidden"?</h3>
-      <ul>
-        <li>Page and hibernation files</li>
-        <li>Restore points and local snapshots</li>
-        <li>Storage the system reserves for updates</li>
-        <li>Folders you don't have permission to open</li>
-      </ul>
+      <div>
+        <ul>
+          <li>Restore points and local snapshots</li>
+          <li>Storage the system reserves for updates</li>
+          <li>File-system bookkeeping</li>
+          <li>Folders you don't have permission to open</li>
+        </ul>
+        <p class="aside">
+          Big system files you can see, like the page file and hibernation file, aren't part of this gap. Roomy lists
+          them by name under System.
+        </p>
+      </div>
     </div>
   </div>
 </section>
@@ -148,6 +154,11 @@ const parts = [
     padding: 0;
     list-style: none;
     color: var(--ink-2);
+  }
+  .aside {
+    margin-top: 1.25rem;
+    color: var(--ink-3);
+    font-size: 0.9rem;
   }
   .hidden-list li {
     padding-left: 1.1rem;

@@ -7,7 +7,7 @@ const a = (href: string, text: string) => `<a class="prose-link" href="${href}">
 const faqs = [
   {
     q: "Is Roomy really free?",
-    a: `Yes. Roomy is free and open source, with no trial, no ads and no paid tier. The code is on ${a(LINKS.github, "GitHub")}.`,
+    a: `Yes. Roomy is free, with no trial, no ads and no paid tier, and its source code is on ${a(LINKS.github, "GitHub")}.`,
   },
   {
     q: "Why does Windows or macOS warn me when I open it?",
@@ -15,7 +15,7 @@ const faqs = [
   },
   {
     q: "Could Roomy delete something important?",
-    a: "It's built to make that very hard. Critical system folders are blocked outright, nothing that holds your own content is pre-selected, and every clean-up ends on a review screen listing each item, its size and how it will be removed. Nothing happens until you confirm.",
+    a: "It's built to make that very hard. Critical system folders are blocked outright, and nothing that holds your own content is pre-selected. Suggested clean-ups end on a review screen listing each item, its size and how it will be removed, and nothing in it runs until you confirm. When you delete something yourself, a single item goes straight to the Recycle Bin or Trash, where you can restore it; several items at once, or a permanent delete, ask you to confirm first.",
   },
   {
     q: "Can I get things back after a clean-up?",
@@ -27,7 +27,7 @@ const faqs = [
   },
   {
     q: "Why is my disk fuller than all my folders add up to?",
-    a: "Systems keep space you never see in a file browser: page and hibernation files, restore points or local snapshots, reserved storage, and folders you don't have permission to open. Roomy shows that as its own labeled \"System & hidden\" block, so all of your used space is accounted for.",
+    a: "Part of it is big system files, like the page file and the hibernation file. Roomy finds those and lists them by name under System. The rest is space that no folder shows at all: restore points or local snapshots, storage reserved for updates, file-system bookkeeping and folders you don't have permission to open. Roomy shows that remainder as its own labeled \"Hidden\" block, so all of your used space is accounted for.",
   },
   {
     q: "How fast is a scan?",

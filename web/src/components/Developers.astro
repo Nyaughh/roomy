@@ -1,17 +1,27 @@
 ---
-// Developer clutter Roomy recognizes (from the app's suggestion list). "Ticked" = pre-selected.
-const rows = [
-  { n: "npm cache", os: "Windows", d: "Ticked" },
-  { n: "pnpm metadata cache", os: "Windows", d: "Ticked" },
-  { n: "Yarn cache", os: "Windows", d: "Ticked" },
-  { n: "pip cache", os: "Windows", d: "Ticked" },
-  { n: "pnpm store", os: "Windows", d: "Listed" },
-  { n: "Cargo registry cache", os: "Windows", d: "Listed" },
-  { n: "Gradle caches", os: "Windows", d: "Listed" },
-  { n: "Xcode DerivedData", os: "Mac", d: "Ticked" },
-  { n: "iOS device support files", os: "Mac", d: "Listed" },
-  { n: "Project build folders", os: "Both", d: "Opt-in" },
+// Developer clutter Roomy recognizes, per platform, from the app's suggestion list
+// (app/src-tauri/src/suggest.rs at 685cb69). "Ticked" = pre-selected, "Listed" = offered, "—" = not on that platform.
+type State = "Ticked" | "Listed" | "Opt-in" | null;
+const rows: { n: string; win: State; mac: State }[] = [
+  { n: "npm cache", win: "Ticked", mac: "Ticked" },
+  { n: "pnpm store", win: "Listed", mac: "Listed" },
+  { n: "Bun cache", win: "Listed", mac: "Listed" },
+  { n: "Cargo registry cache", win: "Listed", mac: "Listed" },
+  { n: "Gradle caches", win: "Listed", mac: "Listed" },
+  { n: "Maven local repository", win: "Listed", mac: "Listed" },
+  { n: "NuGet packages folder", win: "Listed", mac: "Listed" },
+  { n: "pnpm metadata cache", win: "Ticked", mac: null },
+  { n: "Yarn cache", win: "Ticked", mac: null },
+  { n: "pip cache", win: "Ticked", mac: null },
+  { n: "uv cache", win: "Ticked", mac: null },
+  { n: "NuGet HTTP cache", win: "Ticked", mac: null },
+  { n: "Go build cache", win: "Ticked", mac: null },
+  { n: "Composer cache", win: "Ticked", mac: null },
+  { n: "Xcode DerivedData", win: null, mac: "Ticked" },
+  { n: "iOS device support files", win: null, mac: "Listed" },
+  { n: "Project build folders", win: "Opt-in", mac: "Opt-in" },
 ];
+const cls = (st: State) => (st ? st.toLowerCase().replace("-", "") : "none");
 ---
 
 <section class="section dev" aria-labelledby="dev-title">
@@ -29,14 +39,14 @@ const rows = [
       <table>
         <caption class="sr-only">Developer caches and folders Roomy recognizes</caption>
         <thead>
-          <tr><th scope="col">What</th><th scope="col">Platform</th><th scope="col">By default</th></tr>
+          <tr><th scope="col">What</th><th scope="col">Windows</th><th scope="col">Mac</th></tr>
         </thead>
         <tbody>
           {rows.map((r) => (
             <tr>
               <th scope="row"><code>{r.n}</code></th>
-              <td>{r.os}</td>
-              <td><span class:list={["st", r.d.toLowerCase().replace("-", "")]}>{r.d}</span></td>
+              <td>{r.win ? <span class:list={["st", cls(r.win)]}>{r.win}</span> : <span class="none" aria-hidden="true">—</span><span class="sr-only">Not on Windows</span>}</td>
+              <td>{r.mac ? <span class:list={["st", cls(r.mac)]}>{r.mac}</span> : <span class="none" aria-hidden="true">—</span><span class="sr-only">Not on Mac</span>}</td>
             </tr>
           ))}
         </tbody>
@@ -102,6 +112,9 @@ const rows = [
   .optin {
     background: var(--butter-wash);
     color: var(--butter-deep);
+  }
+  .none {
+    color: var(--ink-3);
   }
   .foot {
     margin-top: 0.9rem;

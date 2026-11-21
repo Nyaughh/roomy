@@ -34,7 +34,7 @@ const segs = rows.flatMap((r) =>
 ---
 
 <div
-  class="pw armed"
+  class="pw"
   data-pw
   role="img"
   aria-label="The Roomy Storage screen for a 512 gigabyte drive: Media 84, Apps 78 including their data and caches, Games 54, Projects 52, System 50 including 14 hidden, Downloads 32, Caches and temp 22, Documents 12 and Other 6 gigabytes, covering all used space. The 22 gigabytes of caches are cleared and shown as room made."
@@ -124,7 +124,7 @@ const segs = rows.flatMap((r) =>
 </div>
 
 <script>
-  // Play once the window is mostly in view (it can sit below the fold on phones).
+  // The full "before" state renders without JS. Only the clean-up transition waits until the window is in view.
   const el = document.querySelector<HTMLElement>("[data-pw]");
   if (el) {
     if (!("IntersectionObserver" in window)) el.classList.add("play");
@@ -145,16 +145,10 @@ const segs = rows.flatMap((r) =>
 
 <style>
   .pw {
-    --t0: 0.15s;
-    --tc: 2.6s; /* the clean-up moment */
+    --tc: 1.2s; /* the clean-up moment, counted from when the window comes into view */
     font-size: 13px;
     line-height: 1.3;
     user-select: none;
-  }
-  .pw.armed:not(.play) *,
-  .pw.armed:not(.play) *::before,
-  .pw.armed:not(.play) *::after {
-    animation-play-state: paused !important;
   }
 
   .os-mac,
@@ -325,7 +319,9 @@ const segs = rows.flatMap((r) =>
     color: var(--butter-deep);
     font-size: 11px;
     font-weight: 600;
-    animation: fade-out var(--dur-slow) var(--ease) calc(var(--tc) + 0.2s) both;
+  }
+  .play .badge {
+    animation: fade-out var(--dur-slow) var(--ease) calc(var(--tc) + 0.2s) forwards;
   }
   .drive {
     margin-top: auto;
@@ -389,11 +385,14 @@ const segs = rows.flatMap((r) =>
   .swap > span {
     grid-area: 1 / 1;
   }
-  .swap .a {
-    animation: fade-out var(--dur-base) var(--ease) calc(var(--tc) + 0.15s) both;
-  }
   .swap .b {
-    animation: fade-in var(--dur-slow) var(--ease) calc(var(--tc) + 0.3s) both;
+    opacity: 0;
+  }
+  .play .swap .a {
+    animation: fade-out var(--dur-base) var(--ease) calc(var(--tc) + 0.15s) forwards;
+  }
+  .play .swap .b {
+    animation: show var(--dur-slow) var(--ease) calc(var(--tc) + 0.3s) forwards;
   }
 
   .bar {
@@ -408,23 +407,22 @@ const segs = rows.flatMap((r) =>
     flex: none;
     border-radius: 3px;
     background: var(--fill);
-    transform-origin: left;
-    animation: grow 0.6s var(--ease) calc(var(--t0) + var(--i) * 0.05s) both;
   }
   .seg.hatch {
     background:
       repeating-linear-gradient(135deg, var(--viz-hatch) 0 2px, transparent 2px 6px),
       var(--fill);
   }
-  .seg.clean {
+  .play .seg.clean {
     animation:
-      grow 0.6s var(--ease) calc(var(--t0) + var(--i) * 0.05s) both,
       to-butter var(--dur-base) var(--ease) var(--tc) forwards,
       collapse var(--dur-slow) var(--ease) calc(var(--tc) + 0.5s) forwards;
   }
   .seg.room {
     width: 0;
     background: var(--viz-highlight);
+  }
+  .play .seg.room {
     animation: room-open var(--dur-slow) var(--ease) calc(var(--tc) + 0.5s) forwards;
   }
   .seg.freeseg {
@@ -455,7 +453,6 @@ const segs = rows.flatMap((r) =>
     gap: 2px 12px;
     padding: 9px 14px;
     border-bottom: 1px solid var(--line);
-    animation: fade-in var(--dur-slow) var(--ease) calc(0.5s + var(--i) * 0.05s) both;
   }
   .row:last-child {
     border-bottom: 0;
@@ -504,9 +501,12 @@ const segs = rows.flatMap((r) =>
     color: var(--butter-ink);
     font-size: 11.5px;
     font-weight: 600;
-    animation: pop var(--dur-slow) var(--ease) calc(var(--tc) + 0.6s) both;
+    opacity: 0;
   }
-  .row.clean .ic {
+  .play .made {
+    animation: pop var(--dur-slow) var(--ease) calc(var(--tc) + 0.6s) forwards;
+  }
+  .play .row.clean .ic {
     animation: to-butter var(--dur-base) var(--ease) var(--tc) forwards;
   }
   .apps {
@@ -538,11 +538,6 @@ const segs = rows.flatMap((r) =>
     padding-right: 21px;
   }
 
-  @keyframes grow {
-    from {
-      transform: scaleX(0);
-    }
-  }
   @keyframes to-butter {
     to {
       background: var(--viz-highlight);
@@ -559,9 +554,12 @@ const segs = rows.flatMap((r) =>
       width: 4.3%;
     }
   }
-  @keyframes fade-in {
+  @keyframes show {
     from {
       opacity: 0;
+    }
+    to {
+      opacity: 1;
     }
   }
   @keyframes fade-out {
@@ -573,6 +571,10 @@ const segs = rows.flatMap((r) =>
     from {
       opacity: 0;
       transform: scale(0.9);
+    }
+    to {
+      opacity: 1;
+      transform: none;
     }
   }
 
@@ -598,14 +600,23 @@ const segs = rows.flatMap((r) =>
       padding: 8px 10px;
       gap: 2px 10px;
     }
+    /* every category stays listed; the app/data/cache split moves onto its own line */
+    .apps li {
+      grid-template-columns: 1fr auto;
+      gap: 1px 10px;
+    }
+    .an {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .av {
+      grid-column: 2;
+      grid-row: 1;
+    }
     .ap {
-      display: none;
-    }
-    .row:nth-child(n + 8) {
-      display: none;
-    }
-    .row:nth-child(7) {
-      border-bottom: 0;
+      grid-column: 1 / -1;
+      grid-row: 2;
+      white-space: normal;
     }
   }
   @media (max-width: 400px) {
@@ -614,7 +625,19 @@ const segs = rows.flatMap((r) =>
       gap: 6px;
     }
     .rs {
+      white-space: normal;
+    }
+    .row {
+      gap: 2px 8px;
+    }
+    .chev {
       display: none;
+    }
+    .row {
+      grid-template-columns: auto 1fr auto;
+    }
+    .av {
+      padding-right: 0;
     }
   }
 </style>
