@@ -23,7 +23,7 @@ import { LINKS, SITE } from "../site";
         </ul>
       </nav>
     </div>
-    <p class="fine">Roomy {SITE.version} · Free · Source on GitHub · Works offline</p>
+    <p class="fine">Roomy {SITE.version} · Free and open source (<a class="lic" href={LINKS.license}>MIT</a>) · Works offline</p>
   </div>
 </footer>
 
@@ -77,5 +77,11 @@ import { LINKS, SITE } from "../site";
     margin-top: 2rem;
     color: var(--ink-3);
     font-size: 0.82rem;
+  }
+  .lic {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line-strong);
+    text-underline-offset: 2px;
   }
 </style>
