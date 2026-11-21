@@ -95,8 +95,10 @@ impl RawDir {
         let mut logical = 0u64;
         let mut files = 0u64;
         for f in &self.files {
-            size += f.size;
-            logical += f.logical;
+            if f.flags & FLAG_HARDLINK == 0 {
+                size += f.size;
+                logical += f.logical;
+            }
             if f.kind == KIND_FILE {
                 files += 1;
             }
@@ -124,6 +126,11 @@ pub struct Tree {
     pub link_keys: HashMap<u32, u64>,
     /// Identities seen under more than one name.
     pub dup_keys: HashSet<u64>,
+    /// What each hard-linked name was last observed as: (observation
+    /// sequence, allocated bytes, logical bytes). Kept independently of which
+    /// name carries the size, so the newest observation always wins.
+    pub link_obs: HashMap<u32, (u64, u64, u64)>,
+    obs_seq: u64,
 }
 
 impl Tree {
@@ -141,6 +148,8 @@ impl Tree {
             generation: 1,
             link_keys: HashMap::new(),
             dup_keys,
+            link_obs: HashMap::new(),
+            obs_seq: 1,
         };
         let id = t.push_node(&root_path, raw.kind, raw.flags, NONE, raw.mtime);
         t.nodes[id as usize].size = raw.total_size;
@@ -179,7 +188,12 @@ impl Tree {
         let RawDir { files, dirs, .. } = raw;
         let mut order: Vec<(u64, Child)> = Vec::with_capacity(files.len() + dirs.len());
         for (i, f) in files.iter().enumerate() {
-            order.push((f.size, Child::File(i)));
+            let charged = if f.flags & FLAG_HARDLINK == 0 {
+                f.size
+            } else {
+                0
+            };
+            order.push((charged, Child::File(i)));
         }
         for (i, d) in dirs.iter().enumerate() {
             order.push((d.total_size, Child::Dir(i)));
@@ -193,12 +207,16 @@ impl Tree {
                 Child::File(i) => {
                     let f = &files[i];
                     let cid = self.push_node(&f.name, f.kind, f.flags, id, f.mtime);
+                    // A non-owning hard-link name is charged nothing.
+                    let charged = f.flags & FLAG_HARDLINK == 0;
+                    let seq = self.obs_seq;
                     let n = &mut self.nodes[cid as usize];
-                    n.size = f.size;
-                    n.logical = f.logical;
+                    n.size = if charged { f.size } else { 0 };
+                    n.logical = if charged { f.logical } else { 0 };
                     n.files = u32::from(f.kind == KIND_FILE);
                     if f.key != 0 && self.dup_keys.contains(&f.key) {
                         self.link_keys.insert(cid, f.key);
+                        self.link_obs.insert(cid, (seq, f.size, f.logical));
                     }
                 }
                 Child::Dir(i) => {
@@ -350,6 +368,7 @@ impl Tree {
     pub fn replace_subtree_with_links(&mut self, id: u32, raw: RawDir, new_dups: HashSet<u64>) {
         let mut keys = self.subtree_link_keys(id);
         self.dup_keys.extend(new_dups);
+        self.obs_seq += 1; // this rescan is the newest observation
         let first_new = self.nodes.len() as u32;
         let old = self.nodes[id as usize];
         if old.first_child != NONE {
@@ -421,47 +440,36 @@ impl Tree {
 
     /// For each identity in `keys`, make exactly one live name carry the
     /// file's size (preferring the name that already did, then the oldest).
+    /// Find a direct child of `id` by name.
+    pub fn child_by_name(&self, id: u32, name: &str) -> Option<u32> {
+        self.children(id).find(|&c| self.name(c) == name)
+    }
+
     pub fn reconcile_links(&mut self, keys: &HashSet<u64>) {
         if keys.is_empty() {
             return;
         }
         let mut members: HashMap<u64, Vec<u32>> = HashMap::new();
-        // The file's current size: the newest live name that carries one
-        // (a fresh rescan is the latest observation), else the newest removed
-        // name (whose size is being handed over).
-        let mut live_size: HashMap<u64, (u32, u64, u64)> = HashMap::new();
-        let mut gone_size: HashMap<u64, (u32, u64, u64)> = HashMap::new();
         for (&node, &key) in &self.link_keys {
-            if !keys.contains(&key) {
-                continue;
-            }
-            let n = &self.nodes[node as usize];
-            if n.size > 0 {
-                let slot = if n.is_deleted() {
-                    &mut gone_size
-                } else {
-                    &mut live_size
-                };
-                let e = slot.entry(key).or_insert((node, n.size, n.logical));
-                if node > e.0 {
-                    *e = (node, n.size, n.logical);
-                }
-            }
-            if !n.is_deleted() {
+            if keys.contains(&key) && !self.nodes[node as usize].is_deleted() {
                 members.entry(key).or_default().push(node);
             }
         }
-        for (key, mut list) in members {
+        for (_, mut list) in members {
             list.sort_unstable();
-            let (_, size, logical) = live_size
-                .get(&key)
-                .or_else(|| gone_size.get(&key))
-                .copied()
-                .unwrap_or((0, 0, 0));
+            // The file's current size is its newest observation (any name),
+            // even if that's zero.
+            let (size, logical) = list
+                .iter()
+                .filter_map(|m| self.link_obs.get(m).map(|&(seq, s, l)| (seq, *m, s, l)))
+                .max_by_key(|&(seq, m, _, _)| (seq, m))
+                .map(|(_, _, s, l)| (s, l))
+                .unwrap_or((0, 0));
+            // Keep charging the name that already carries it, else the oldest.
             let keep = list
                 .iter()
                 .copied()
-                .find(|&m| self.nodes[m as usize].size > 0)
+                .find(|&m| self.nodes[m as usize].flags & FLAG_HARDLINK == 0)
                 .unwrap_or(list[0]);
             for m in list {
                 let (s, l) = if m == keep { (size, logical) } else { (0, 0) };
@@ -483,11 +491,6 @@ impl Tree {
                 }
             }
         }
-    }
-
-    /// Find a direct child of `id` by name.
-    pub fn child_by_name(&self, id: u32, name: &str) -> Option<u32> {
-        self.children(id).find(|&c| self.name(c) == name)
     }
 }
 
@@ -594,7 +597,8 @@ mod tests {
         a.files.push(linked("x", 100, 7));
         a.finish();
         let mut b = RawDir::new("b".into(), 0);
-        let mut y = linked("y", 0, 7);
+        // y is another name for x's data: observed at 100, charged nothing.
+        let mut y = linked("y", 100, 7);
         y.flags = FLAG_HARDLINK;
         b.files.push(y);
         b.files.push(file("z", 5));
@@ -633,6 +637,40 @@ mod tests {
         fresh.finish();
         t.replace_subtree_with_links(a, fresh, HashSet::new());
         assert_eq!(t.nodes[0].size, 45, "40 for the file (once) + 5 for z");
+        // Then truncated to nothing: zero is a real observation too.
+        let mut empty = RawDir::new("a".into(), 0);
+        empty.files.push(linked("x", 0, 7));
+        empty.finish();
+        t.replace_subtree_with_links(a, empty, HashSet::new());
+        assert_eq!(t.nodes[0].size, 5, "nothing resurrects the old size");
+    }
+
+    #[test]
+    fn a_linked_file_keeps_its_logical_length_without_allocation() {
+        // A tiny file stored inside the file table: 0 allocated, 300 long.
+        let mut a = RawDir::new("a".into(), 0);
+        let mut x = linked("x", 0, 8);
+        x.logical = 300;
+        a.files.push(x);
+        a.finish();
+        let mut b = RawDir::new("b".into(), 0);
+        let mut y = linked("y", 0, 8);
+        y.logical = 300;
+        y.flags = FLAG_HARDLINK;
+        b.files.push(y);
+        b.finish();
+        let mut root = RawDir::new("r".into(), 0);
+        root.dirs.push(a);
+        root.dirs.push(b);
+        root.finish();
+        let mut t = Tree::from_raw_with_links(root, "/r".into(), [8u64].into_iter().collect());
+        assert_eq!(t.nodes[0].logical, 300);
+        let a = t.child_by_name(0, "a").unwrap();
+        t.remove(a);
+        assert_eq!(
+            t.nodes[0].logical, 300,
+            "the other name now carries the length"
+        );
     }
 
     #[test]

@@ -8,11 +8,11 @@
 //! only ever removed as a link, and removal never crosses into another
 //! mounted volume.
 
-use crate::safety::{is_protected_name, linked_ancestor, Guard};
+use crate::safety::{is_protected_name, linked_ancestor, Guard, Pinned};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +29,22 @@ pub struct Stats {
     pub removed: u64,
     pub failed: u64,
     pub first_error: Option<String>,
+    /// Space really given back: files that had no other name (link count 1)
+    /// when they were removed.
+    pub freed_bytes: u64,
+    /// Removed names whose data is still reachable through another hard link.
+    pub shared_bytes: u64,
+}
+
+impl Stats {
+    fn count_file(&mut self, links: u64, bytes: u64) {
+        self.removed += 1;
+        if links > 1 {
+            self.shared_bytes += bytes;
+        } else {
+            self.freed_bytes += bytes;
+        }
+    }
 }
 
 impl Stats {
@@ -85,13 +101,6 @@ fn older_than_secs(mtime_secs: i64, min_age: Option<Duration>) -> bool {
     }
 }
 
-/// Where `path`'s parent really is, plus its name: what removal must find
-/// when it opens the target (checked again on the opened handle).
-fn expected_location(path: &Path) -> Option<PathBuf> {
-    let (parent, name) = (path.parent()?, path.file_name()?);
-    Some(fs::canonicalize(parent).ok()?.join(name))
-}
-
 /// True if another volume is mounted at `path` (or `path` is a volume root).
 pub fn is_mount_point(path: &Path) -> bool {
     sys::is_mount_point(path)
@@ -142,7 +151,7 @@ pub fn inspect(dir: &Path) -> Result<(), String> {
 /// directory and everything in it. Items that can't be removed (in use, no
 /// permission, on another volume, protected) are skipped and counted.
 pub fn remove_tree(path: &Path, min_age: Option<Duration>, stats: &mut Stats) {
-    let Some(expected) = expected_location(path) else {
+    let Some(pin) = Pinned::capture(path) else {
         if fs::symlink_metadata(path).is_ok() {
             stats.fail_msg(format!(
                 "Couldn't confirm where {} is, so it was left alone.",
@@ -151,12 +160,15 @@ pub fn remove_tree(path: &Path, min_age: Option<Duration>, stats: &mut Stats) {
         }
         return;
     };
-    sys::remove_path(path, &expected, min_age, stats);
+    sys::remove_path(path, &pin, min_age, stats);
 }
 
 /// Delete one item after checking it against the guard.
 pub fn delete_path(guard: &Guard, path: &Path, mode: Mode) -> Result<Stats, String> {
-    guard.check(path)?;
+    // Everything below acts on the location this check verified.
+    let Some(pin) = guard.check_pinned(path)? else {
+        return Ok(Stats::default());
+    };
     let md = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Stats::default()),
@@ -178,7 +190,7 @@ pub fn delete_path(guard: &Guard, path: &Path, mode: Mode) -> Result<Stats, Stri
     match mode {
         Mode::Permanent => {
             let mut stats = Stats::default();
-            remove_tree(path, None, &mut stats);
+            sys::remove_path(path, &pin, None, &mut stats);
             Ok(stats)
         }
         Mode::Trash => {
@@ -234,6 +246,13 @@ pub fn delete_contents(
             dir.display()
         ));
     }
+    // Pin the folder as checked; emptying it must happen in exactly that folder.
+    let Some(pin) = Pinned::folder(dir) else {
+        return Err(format!(
+            "Couldn't confirm where {} is, so Roomy left it alone.",
+            dir.display()
+        ));
+    };
     let mut stats = Stats::default();
     if !md.is_dir() {
         guard.check(dir)?;
@@ -250,7 +269,8 @@ pub fn delete_contents(
         }
         Ok(())
     };
-    sys::remove_children(dir, min_age, &mut stats, &mut check).map_err(|e| describe(dir, &e))?;
+    sys::remove_children(dir, &pin, min_age, &mut stats, &mut check)
+        .map_err(|e| describe(dir, &e))?;
     Ok(stats)
 }
 
@@ -320,6 +340,26 @@ mod sys {
             return Err(io::Error::last_os_error());
         }
         Ok((info.FileAttributes, info.ReparseTag))
+    }
+
+    /// (link count, bytes allocated) for the object behind the handle.
+    fn links_and_size(h: &H) -> (u64, u64) {
+        let mut info: FILE_STANDARD_INFO = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                h.0,
+                FileStandardInfo,
+                &mut info as *mut _ as *mut c_void,
+                std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+        };
+        if ok == 0 {
+            return (1, 0);
+        }
+        (
+            u64::from(info.NumberOfLinks),
+            info.AllocationSize.max(0) as u64,
+        )
     }
 
     fn basic(h: &H) -> io::Result<FILE_BASIC_INFO> {
@@ -479,21 +519,29 @@ mod sys {
                 return;
             }
         }
+        // Read the link count from the open handle right before deleting.
+        let (links, bytes) = links_and_size(&h);
         match delete(&h) {
-            Ok(()) => stats.removed += 1,
+            Ok(()) => stats.count_file(links, bytes),
             Err(e) => stats.fail(path, &e),
         }
     }
 
-    pub fn remove_path(path: &Path, expected: &Path, min_age: Option<Duration>, stats: &mut Stats) {
+    pub fn remove_path(path: &Path, pin: &Pinned, min_age: Option<Duration>, stats: &mut Stats) {
+        if path.file_name() != Some(pin.name.as_os_str()) {
+            return stats.fail_msg(format!(
+                "{} isn't what was checked, so it was left alone.",
+                path.display()
+            ));
+        }
         let h = match open(path) {
             Ok(h) => h,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return,
             Err(e) => return stats.fail(path, &e),
         };
-        // The object we pinned must be the one that was checked.
+        // The object we opened (and now hold) must be the one that was checked.
         if final_path(&h)
-            .map(|f| norm(&f) != norm(&expected.to_string_lossy()))
+            .map(|f| norm(&f) != norm(&pin.target().to_string_lossy()))
             .unwrap_or(true)
         {
             return stats.fail_msg(format!(
@@ -506,6 +554,7 @@ mod sys {
 
     pub fn remove_children(
         dir: &Path,
+        pin: &Pinned,
         min_age: Option<Duration>,
         stats: &mut Stats,
         check: &mut Check<'_>,
@@ -514,6 +563,14 @@ mod sys {
         let (attrs, _) = attr_tag(&h)?;
         if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 || attrs & FILE_ATTRIBUTE_DIRECTORY == 0 {
             return Err(io::Error::other("not a real folder"));
+        }
+        if final_path(&h)
+            .map(|f| norm(&f) != norm(&pin.target().to_string_lossy()))
+            .unwrap_or(true)
+        {
+            return Err(io::Error::other(
+                "the folder changed while Roomy was working",
+            ));
         }
         // `h` pins the folder for the whole operation.
         for e in enumerate_handle(h.0)? {
@@ -716,34 +773,49 @@ mod sys {
                 return;
             }
         }
-        // Files and links (a link is removed as a link).
+        // Files and links (a link is removed as a link). Link count and
+        // allocation come from the same lstat that identified the entry.
+        let (links, bytes) = if is_symlink {
+            (1, 0)
+        } else {
+            nlink_blocks(&st)
+        };
         match unlink_at(dir, name, 0) {
-            Ok(()) => stats.removed += 1,
+            Ok(()) => stats.count_file(links, bytes),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => stats.fail(display, &e),
         }
     }
 
-    pub fn remove_path(path: &Path, expected: &Path, min_age: Option<Duration>, stats: &mut Stats) {
-        let (Some(parent), Some(name)) = (expected.parent(), path.file_name()) else {
+    #[allow(clippy::unnecessary_cast)]
+    fn nlink_blocks(st: &libc::stat) -> (u64, u64) {
+        (st.st_nlink as u64, st.st_blocks as u64 * 512)
+    }
+
+    pub fn remove_path(path: &Path, pin: &Pinned, min_age: Option<Duration>, stats: &mut Stats) {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
             return stats.fail_msg(format!("Couldn't confirm where {} is.", path.display()));
         };
-        let Ok(want) = fs::metadata(parent) else {
-            return stats.fail_msg(format!("Couldn't confirm where {} is.", path.display()));
-        };
-        // Pin the (already link-free, canonical) parent and check it's the
-        // same folder that was checked.
-        let pfd = match open_dir(parent, false) {
+        if name != pin.name.as_os_str() {
+            return stats.fail_msg(format!(
+                "{} isn't what was checked, so it was left alone.",
+                path.display()
+            ));
+        }
+        // Open the folder the path names now, hold it, and make sure it's the
+        // very folder the guard checked (same device and inode).
+        let pfd = match open_dir(parent, true) {
             Ok(fd) => fd,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
             Err(e) => return stats.fail(path, &e),
         };
         let pst = match fstat(pfd.as_raw_fd()) {
             Ok(s) => s,
             Err(e) => return stats.fail(path, &e),
         };
-        if ids(&pst) != (want.dev(), want.ino()) {
+        if ids(&pst) != pin.parent_id {
             return stats.fail_msg(format!(
-                "{} changed while Roomy was working, so it was left alone.",
+                "{} isn't where it was checked, so it was left alone.",
                 path.display()
             ));
         }
@@ -753,12 +825,19 @@ mod sys {
 
     pub fn remove_children(
         dir: &Path,
+        pin: &Pinned,
         min_age: Option<Duration>,
         stats: &mut Stats,
         check: &mut Check<'_>,
     ) -> io::Result<()> {
         let fd = open_dir(dir, false)?;
-        let dev = ids(&fstat(fd.as_raw_fd())?).0;
+        let st = fstat(fd.as_raw_fd())?;
+        if ids(&st) != pin.parent_id {
+            return Err(io::Error::other(
+                "the folder changed while Roomy was working",
+            ));
+        }
+        let dev = ids(&st).0;
         for c in list(fd.as_raw_fd())? {
             let child = dir.join(&c);
             if let Err(reason) = check(&child) {
@@ -1002,11 +1081,41 @@ mod tests {
         fs::create_dir_all(&real).unwrap();
         fs::create_dir_all(&other).unwrap();
         fs::write(real.join("f"), b"x").unwrap();
-        // Pretend the check resolved somewhere else: the pinned handle won't match.
+        // The guard verified other/f; by deletion time the path leads to real/f.
+        let pin = Pinned::capture(&other.join("f")).unwrap();
         let mut stats = Stats::default();
-        sys::remove_path(&real, &other.join("real"), None, &mut stats);
+        sys::remove_path(&real.join("f"), &pin, None, &mut stats);
         assert!(real.join("f").exists(), "nothing removed");
         assert_eq!(stats.failed, 1);
+        // A folder pinned for emptying must be the folder that gets emptied.
+        let pin = Pinned::folder(&other).unwrap();
+        let mut ok = |_: &Path| -> Result<(), String> { Ok(()) };
+        assert!(sys::remove_children(&real, &pin, None, &mut Stats::default(), &mut ok).is_err());
+        assert!(real.join("f").exists());
+    }
+
+    #[test]
+    fn removal_reports_shared_hard_links_separately() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("d");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("solo.bin"), vec![1u8; 64 * 1024]).unwrap();
+        fs::write(tmp.path().join("kept.bin"), vec![2u8; 64 * 1024]).unwrap();
+        fs::hard_link(tmp.path().join("kept.bin"), d.join("linked.bin")).unwrap();
+        // Both names of a pair inside the folder: the second one frees it.
+        fs::write(d.join("pair_a.bin"), vec![3u8; 64 * 1024]).unwrap();
+        fs::hard_link(d.join("pair_a.bin"), d.join("pair_b.bin")).unwrap();
+        let stats = delete_path(&open_guard(), &d, Mode::Permanent).unwrap();
+        assert!(!d.exists());
+        assert!(
+            stats.shared_bytes >= 2 * 64 * 1024 - 1,
+            "linked.bin + first of the pair: {stats:?}"
+        );
+        assert!(
+            stats.freed_bytes >= 2 * 64 * 1024 - 1,
+            "solo + second of the pair: {stats:?}"
+        );
+        assert!(tmp.path().join("kept.bin").exists());
     }
 
     #[test]

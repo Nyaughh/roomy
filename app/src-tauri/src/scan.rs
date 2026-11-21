@@ -200,22 +200,24 @@ fn walk(ctx: &ScanCtx, path: PathBuf, name: String, mtime: i64) -> RawDir {
             continue;
         }
         let mut flags = 0;
-        let mut size = e.alloc;
-        let mut logical = e.logical;
+        let size = e.alloc;
+        let logical = e.logical;
         let mut key = 0;
         if ctx.dedup {
             if let Some(k) = e.dedup_key {
                 key = k;
                 if !ctx.seen.insert(k) {
+                    // Another name for data already counted: keep what we
+                    // observed, but flag it so it isn't charged again.
                     ctx.hardlink_bytes.fetch_add(size, Ordering::Relaxed);
                     ctx.dup_keys.lock().insert(k);
                     flags |= FLAG_HARDLINK;
-                    size = 0;
-                    logical = 0;
                 }
             }
         }
-        bytes += size;
+        if flags & FLAG_HARDLINK == 0 {
+            bytes += size;
+        }
         nfiles += 1;
         dir.files.push(RawEntry {
             name: e.name,

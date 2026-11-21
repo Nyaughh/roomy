@@ -168,8 +168,8 @@ export interface Suggestion {
 
 export interface CleanReport {
   freed: number;
-  /** Removed outside the scan: measured, not hard-link checked. */
-  outside: number;
+  /** Removed names whose data is still used through another hard link. */
+  shared: number;
   cleaned: number;
   failed: number;
   errors: string[];

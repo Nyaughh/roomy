@@ -623,9 +623,9 @@ fn refresh_summary(d: &mut ScanData) {
 /// After files under `path` changed on disk, bring the tree in line without
 /// a full rescan: drop the node if it's gone, otherwise rescan just it.
 fn sync_path(d: &mut ScanData, id: u32, path: &Path) {
-    // Never rescan the whole scan root (or a pseudo node) from here: that
-    // would drop the drive-level accounting.
-    if id == 0 || d.tree.get(id).is_none() || d.tree.is_pseudo(id) {
+    // Never rescan a whole drive root (or a pseudo node) from here: that would
+    // drop the drive-level accounting. A scanned folder's root is fine.
+    if (id == 0 && d.summary.is_volume) || d.tree.get(id).is_none() || d.tree.is_pseudo(id) {
         return;
     }
     match std::fs::symlink_metadata(path) {
@@ -693,12 +693,18 @@ async fn delete_nodes(app: AppHandle, ids: Vec<u32>, mode: Mode) -> Result<Delet
                 .map(|(id, _, p, _, _)| (*id, p.clone()))
                 .collect::<Vec<_>>(),
         );
-        for ((id, name, _path, listed, r), bytes) in results.into_iter().zip(freed) {
+        for ((id, name, _path, _listed, r), moved) in results.into_iter().zip(freed) {
+            // Permanent: what the remover really gave back (files with no other
+            // hard link at the moment they were removed). Trash: what left the
+            // scanned files and went to the bin.
+            let bytes = match (&r, mode) {
+                (Ok(st), Mode::Permanent) => {
+                    shared += st.shared_bytes;
+                    st.freed_bytes
+                }
+                _ => moved,
+            };
             total += bytes;
-            // Removed names whose data lives on under another (hard-link) name.
-            if r.as_ref().map(|s| s.failed == 0).unwrap_or(false) {
-                shared += listed.saturating_sub(bytes);
-            }
             match r {
                 Ok(stats) => out.push(ItemResult {
                     id,
@@ -764,11 +770,11 @@ struct CleanSelection {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CleanReport {
-    /// Bytes that really left the scanned drive/folder (hard-link aware),
-    /// plus what emptying the Recycle Bin freed.
+    /// Space really given back: removed files that had no other hard link
+    /// at the moment they were removed, plus what emptying the bin freed.
     freed: u64,
-    /// Removed from folders outside the scan: measured, not hard-link checked.
-    outside: u64,
+    /// Removed names whose data is still used through another hard link.
+    shared: u64,
     cleaned: u32,
     failed: u64,
     errors: Vec<String>,
@@ -783,7 +789,8 @@ async fn clean_suggestions(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let known = state.suggestions.lock().clone();
-        let mut outside = 0u64;
+        let mut freed = 0u64;
+        let mut shared = 0u64;
         let mut bin_freed = 0u64;
         let mut cleaned = 0u32;
         let mut failed = 0u64;
@@ -810,18 +817,6 @@ async fn clean_suggestions(
                 continue;
             }
             let path = PathBuf::from(&sel.path);
-            // Paths outside the scan can only be measured, not hard-link checked.
-            let in_scan = state
-                .data
-                .read()
-                .as_ref()
-                .map(|d| views::find_by_path(&d.tree, &path).is_some())
-                .unwrap_or(false);
-            let measured_before = if in_scan {
-                0
-            } else {
-                scan::measure(&path, Arc::new(AtomicBool::new(false))).0
-            };
             let min_age = s.min_age_hours.map(|h| Duration::from_secs(h * 3600));
             let res = match s.action {
                 suggest::Action::Contents => delete::delete_contents(&state.guard, &path, min_age),
@@ -829,10 +824,9 @@ async fn clean_suggestions(
             };
             match res {
                 Ok(stats) => {
-                    if !in_scan {
-                        let (after, _) = scan::measure(&path, Arc::new(AtomicBool::new(false)));
-                        outside += measured_before.saturating_sub(after);
-                    }
+                    // Physical: counted per file from its link count at removal.
+                    freed += stats.freed_bytes;
+                    shared += stats.shared_bytes;
                     cleaned += 1;
                     failed += stats.failed;
                     if let Some(e) = stats.first_error {
@@ -843,29 +837,26 @@ async fn clean_suggestions(
                 }
                 Err(e) => errors.push(e),
             }
-            if in_scan {
-                touched.push(path);
-            }
+            touched.push(path);
         }
-        // Update the scanned tree for everything we touched and measure what
-        // really left it.
-        let (freed, summary) = {
+        // Bring the scanned tree in line for everything we touched.
+        let summary = {
             let mut g = state.data.write();
             if let Some(d) = g.as_mut() {
                 let items: Vec<(u32, PathBuf)> = touched
                     .iter()
                     .filter_map(|p| views::find_by_path(&d.tree, p).map(|id| (id, p.clone())))
                     .collect();
-                let freed: u64 = settle(d, &items).iter().sum();
+                settle(d, &items);
                 refresh_summary(d);
-                (freed, Some(d.summary.clone()))
+                Some(d.summary.clone())
             } else {
-                (0, None)
+                None
             }
         };
         Ok(CleanReport {
             freed: freed + bin_freed,
-            outside,
+            shared,
             cleaned,
             failed,
             errors,
@@ -1141,7 +1132,7 @@ async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<Action
                 e.locations
                     .iter()
                     .map(|l| l.node)
-                    .filter(|n| *n != 0)
+                    .filter(|n| *n != 0 || !d.summary.is_volume)
                     .filter(live)
                     .map(|n| (n, d.tree.path(n)))
                     .collect(),
@@ -1173,6 +1164,8 @@ async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<Action
             "clearCache" | "cleanBuild" => {
                 let mut failed = 0;
                 let mut errors = Vec::new();
+                let mut freed = 0u64;
+                let mut shared = 0u64;
                 for (_, p) in &targets {
                     let r = if action == "clearCache" {
                         delete::delete_contents(&state.guard, p, None)
@@ -1182,6 +1175,8 @@ async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<Action
                     match r {
                         Ok(st) => {
                             failed += st.failed;
+                            freed += st.freed_bytes;
+                            shared += st.shared_bytes;
                             if let Some(e) = st.first_error {
                                 errors.push(e);
                             }
@@ -1194,12 +1189,22 @@ async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<Action
                 }
                 let mut g = state.data.write();
                 let d = g.as_mut().ok_or("No scan yet.")?;
-                let freed: u64 = settle(d, &targets).iter().sum();
+                settle(d, &targets);
                 refresh_summary(d);
+                let shared_note = if shared > 0 {
+                    format!(
+                        " {} more is still used by other hard links.",
+                        fmt_bytes(shared)
+                    )
+                } else {
+                    String::new()
+                };
                 Ok(ActionReport {
                     message: match errors.first() {
-                        Some(e) if failed > 0 => format!("Freed {}. {e}", fmt_bytes(freed)),
-                        _ => format!("Freed {}.", fmt_bytes(freed)),
+                        Some(e) if failed > 0 => {
+                            format!("Freed {}.{shared_note} {e}", fmt_bytes(freed))
+                        }
+                        _ => format!("Freed {}.{shared_note}", fmt_bytes(freed)),
                     },
                     freed,
                     failed,
@@ -1325,14 +1330,50 @@ mod tests {
     }
 
     #[test]
-    fn the_scan_root_is_never_resynced_as_a_folder() {
+    fn drive_roots_are_never_resynced_but_folder_roots_are() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         std::fs::write(root.join("x.bin"), vec![1u8; 1000]).unwrap();
+        // As a drive scan: the root is never rescanned from here.
         let mut d = scan_data(&root);
-        let before = d.tree.nodes.len();
+        d.summary.is_volume = true;
+        std::fs::remove_file(root.join("x.bin")).unwrap();
         sync_path(&mut d, 0, &root);
-        assert_eq!(d.tree.nodes.len(), before, "no rescan of the root");
+        assert_eq!(d.tree.nodes[0].logical, 1000, "drive root untouched");
+        // As a folder scan (e.g. the folder is itself a cache that was
+        // emptied): the root is brought up to date.
+        std::fs::write(root.join("x.bin"), vec![1u8; 1000]).unwrap();
+        let mut d = scan_data(&root);
+        std::fs::remove_file(root.join("x.bin")).unwrap();
+        let freed = settle(&mut d, &[(0, root.clone())]);
+        assert_eq!(d.tree.nodes[0].logical, 0);
+        assert!(freed[0] > 0);
+    }
+
+    #[test]
+    fn delete_reports_physical_space_even_when_the_other_link_is_outside_the_scan() {
+        // Scan only `proj`; its node_modules file is hard-linked to a store
+        // outside the scan (like pnpm). Removing it frees nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let proj = base.join("proj");
+        std::fs::create_dir_all(proj.join("node_modules")).unwrap();
+        std::fs::create_dir_all(base.join("store")).unwrap();
+        std::fs::write(base.join("store/dep.js"), vec![7u8; 64 * 1024]).unwrap();
+        std::fs::hard_link(base.join("store/dep.js"), proj.join("node_modules/dep.js")).unwrap();
+        std::fs::write(proj.join("node_modules/own.js"), vec![8u8; 64 * 1024]).unwrap();
+        let stats = delete::delete_path(
+            &safety::Guard::default(),
+            &proj.join("node_modules"),
+            Mode::Permanent,
+        )
+        .unwrap();
+        assert!(stats.shared_bytes >= 64 * 1024 - 1, "{stats:?}");
+        assert!(
+            stats.freed_bytes >= 64 * 1024 - 1 && stats.freed_bytes < 2 * 64 * 1024,
+            "{stats:?}"
+        );
+        assert!(base.join("store/dep.js").exists());
     }
 
     #[test]

@@ -445,7 +445,13 @@ export function Suggestions({
 
       {result && (
         <Dialog
-          title={result.report.freed + result.trashed > 0 ? "Room made" : "Nothing was removed"}
+          title={
+            result.report.freed + result.trashed > 0
+              ? "Room made"
+              : result.report.shared > 0 || result.report.cleaned > 0
+                ? "Cleaned up"
+                : "Nothing was removed"
+          }
           onClose={() => setResult(null)}
           footer={
             <button className="btn primary" onClick={() => setResult(null)} data-autofocus>
@@ -461,9 +467,9 @@ export function Suggestions({
                 plus {bytes(result.trashed)} moved to the {binName}
               </div>
             )}
-            {result.report.outside > 0 && (
+            {result.report.shared > 0 && (
               <div className="muted" style={{ marginTop: 6 }}>
-                plus about {bytes(result.report.outside)} removed from folders outside this scan
+                {bytes(result.report.shared)} more was removed but is still used by other hard links, so it stays on disk
               </div>
             )}
           </div>

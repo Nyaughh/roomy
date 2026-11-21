@@ -69,6 +69,58 @@ fn key(p: &Path) -> Vec<String> {
     out
 }
 
+/// What a guard check verified: the item's real parent folder, that folder's
+/// identity (device and inode on Unix) and the item's name.
+#[derive(Debug, Clone)]
+pub struct Pinned {
+    pub parent: PathBuf,
+    pub name: std::ffi::OsString,
+    pub parent_id: (u64, u64),
+}
+
+impl Pinned {
+    /// Pin a path without guard rules (internal removals, tests).
+    pub fn capture(path: &Path) -> Option<Pinned> {
+        let parent = std::fs::canonicalize(path.parent()?).ok()?;
+        Some(Pinned {
+            parent_id: folder_id(&parent)?,
+            parent,
+            name: path.file_name()?.to_os_string(),
+        })
+    }
+
+    /// Pin a folder itself (for emptying its contents).
+    pub fn folder(dir: &Path) -> Option<Pinned> {
+        let real = std::fs::canonicalize(dir).ok()?;
+        Some(Pinned {
+            parent_id: folder_id(&real)?,
+            parent: real,
+            name: Default::default(),
+        })
+    }
+
+    pub fn target(&self) -> PathBuf {
+        if self.name.is_empty() {
+            self.parent.clone()
+        } else {
+            self.parent.join(&self.name)
+        }
+    }
+}
+
+/// Identity of a folder: (device, inode) on Unix. On Windows the pinned
+/// canonical path is compared against the opened handle's final path.
+#[cfg(unix)]
+pub fn folder_id(p: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+pub fn folder_id(p: &Path) -> Option<(u64, u64)> {
+    std::fs::metadata(p).ok().map(|_| (0, 0))
+}
+
 /// True for files that must never be deleted wherever they are
 /// (registry hives, page/hibernation files).
 pub fn is_protected_name(name: &str) -> bool {
@@ -317,11 +369,19 @@ impl Guard {
 
     /// Ok if `path` may be deleted, otherwise a plain-language reason.
     pub fn check(&self, path: &Path) -> Result<(), String> {
+        self.check_pinned(path).map(|_| ())
+    }
+
+    /// Check `path` and return exactly what was verified: its real parent
+    /// folder (and that folder's identity) and its name. Deletion must then
+    /// act on that same folder, never on whatever the path resolves to later.
+    /// `None` when there's nothing at `path`.
+    pub fn check_pinned(&self, path: &Path) -> Result<Option<Pinned>, String> {
         self.check_lexical(path)?;
         let md = match std::fs::symlink_metadata(path) {
             Ok(m) => m,
             // Nothing there: nothing will be deleted.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(UNVERIFIED.into()),
         };
         // Only delete things at their real location: a link anywhere above
@@ -337,13 +397,18 @@ impl Guard {
             return Err(UNVERIFIED.into());
         };
         let real_parent = std::fs::canonicalize(parent).map_err(|_| UNVERIFIED.to_string())?;
+        let parent_id = folder_id(&real_parent).ok_or_else(|| UNVERIFIED.to_string())?;
         self.check_lexical(&real_parent.join(name))?;
         if !md.file_type().is_symlink() {
             // (Deleting a link removes only the link, so its target doesn't matter.)
             let real = std::fs::canonicalize(path).map_err(|_| UNVERIFIED.to_string())?;
             self.check_lexical(&real)?;
         }
-        Ok(())
+        Ok(Some(Pinned {
+            parent: real_parent,
+            name: name.to_os_string(),
+            parent_id,
+        }))
     }
 
     fn check_lexical(&self, path: &Path) -> Result<(), String> {
