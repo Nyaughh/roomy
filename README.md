@@ -18,6 +18,12 @@ Roomy is a [Tauri 2](https://tauri.app) app: a Rust backend (parallel scanner, c
 ### What it does
 
 - **Scan** a whole drive or any folder with a parallel Rust walker, with live progress. On Windows it lists each directory with one `GetFileInformationByHandleEx` call per batch, so it never opens individual files.
+- **Storage, like your phone's:** the home view after a scan lists the actual things on the drive with their sizes: Apps, Games, Projects, Media, Documents, Downloads, System, Caches & temp and Other. Every byte is counted once and the categories add up to the drive's used space.
+  - Apps come from the Windows uninstall registry, Microsoft Store packages and Unreal Engine installs, and each app includes its AppData/ProgramData folders, split into app, data and cache.
+  - Games come from Steam, Epic, GOG, Ubisoft, Xbox and known publishers.
+  - Projects are detected by `.git`/`package.json`/`Cargo.toml`/…, each with its reclaimable build and dependency size.
+  - Everything comes from the same single scan: the catalog of installed apps is read from the registry and launcher manifests, never from a second walk.
+  - Actions: open a location in Explorer or in the map, clear an app's cache, clean a project's build/deps, and uninstall through the app's own uninstaller (Roomy never deletes an installed app's files itself).
 - **Nothing hidden:** for drives, Roomy compares what it found with the space Windows/macOS reports as used. It shows the difference as its own "System & unreadable space" block (NTFS file table, restore points, reserved storage, folders it couldn't open) instead of leaving it out.
 - **Correct counting:** hard links are counted once. Junctions, symlinks and mount points are shown but never followed, so nothing is counted twice and loops are impossible.
 - **Explore** with a treemap you can click into, breadcrumbs and a sorted, virtualized list. It also has a file-type breakdown and the largest files.

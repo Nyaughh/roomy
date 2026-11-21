@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FileStack, House, LayoutGrid, ListChecks, PieChart, RotateCw } from "lucide-react";
+import { FileStack, HardDrive, House, LayoutGrid, ListChecks, PieChart, RotateCw } from "lucide-react";
 import { api, errorText, type AppInfo, type Suggestion, type Summary } from "../api";
 import { bytes, count, duration, percent, plural } from "../format";
 import { DeleteProvider } from "./DeleteFlow";
@@ -7,12 +7,13 @@ import { Dialog } from "./Dialog";
 import { Explorer } from "./Explorer";
 import { Largest } from "./Largest";
 import { Mark } from "./Logo";
+import { Storage } from "./Storage";
 import { Suggestions } from "./Suggestions";
 import { ThemeToggle } from "./ThemeToggle";
 import { useToasts } from "./Toasts";
 import { Types } from "./Types";
 
-type Tab = "explore" | "types" | "largest" | "suggestions";
+type Tab = "storage" | "explore" | "types" | "largest" | "suggestions";
 
 export function Results({
   info,
@@ -27,11 +28,11 @@ export function Results({
   onRescan: () => void;
   onHome: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>("explore");
+  const [tab, setTab] = useState<Tab>("storage");
   const [currentId, setCurrentId] = useState(0);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
   const [suggLoading, setSuggLoading] = useState(false);
-  const [visited, setVisited] = useState<Set<Tab>>(new Set(["explore"]));
+  const [visited, setVisited] = useState<Set<Tab>>(new Set(["storage"]));
   const [showGap, setShowGap] = useState(false);
   const toasts = useToasts();
 
@@ -53,7 +54,7 @@ export function Results({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
-      const map: Record<string, Tab> = { "1": "explore", "2": "types", "3": "largest", "4": "suggestions" };
+      const map: Record<string, Tab> = { "1": "storage", "2": "explore", "3": "types", "4": "largest", "5": "suggestions" };
       if (map[e.key]) {
         e.preventDefault();
         go(map[e.key]);
@@ -76,10 +77,11 @@ export function Results({
   const title = summary.isVolume ? `Drive ${summary.rootPath.replace(/\\$/, "")}` : summary.rootPath.split(/[\\/]/).filter(Boolean).pop() ?? summary.rootPath;
 
   const nav: { key: Tab; label: string; icon: typeof LayoutGrid; kbd: string }[] = [
-    { key: "explore", label: "Explore", icon: LayoutGrid, kbd: "1" },
-    { key: "types", label: "File types", icon: PieChart, kbd: "2" },
-    { key: "largest", label: "Largest files", icon: FileStack, kbd: "3" },
-    { key: "suggestions", label: "Suggestions", icon: ListChecks, kbd: "4" },
+    { key: "storage", label: "Storage", icon: HardDrive, kbd: "1" },
+    { key: "explore", label: "Explore", icon: LayoutGrid, kbd: "2" },
+    { key: "types", label: "File types", icon: PieChart, kbd: "3" },
+    { key: "largest", label: "Largest files", icon: FileStack, kbd: "4" },
+    { key: "suggestions", label: "Suggestions", icon: ListChecks, kbd: "5" },
   ];
 
   return (
@@ -183,6 +185,23 @@ export function Results({
             </button>
           </header>
           <div className="content">
+            {tab === "storage" && (
+              <Storage
+                summary={summary}
+                onSummary={setSummary}
+                openInMap={(node) => {
+                  api
+                    .node(node)
+                    .then((n) => {
+                      const dirId =
+                        n.node.kind === "dir" ? n.node.id : (n.crumbs[n.crumbs.length - 2]?.id ?? 0);
+                      setCurrentId(dirId);
+                      go("explore");
+                    })
+                    .catch((e) => toasts.err(errorText(e)));
+                }}
+              />
+            )}
             {tab === "explore" && <Explorer summary={summary} currentId={currentId} setCurrentId={setCurrentId} />}
             {tab === "types" && <Types summary={summary} />}
             {tab === "largest" && <Largest summary={summary} />}

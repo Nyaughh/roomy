@@ -223,3 +223,74 @@ export function errorText(e: unknown): string {
   if (e instanceof Error) return e.message;
   return "Something went wrong.";
 }
+
+export type StorageCategory =
+  | "apps"
+  | "games"
+  | "projects"
+  | "media"
+  | "documents"
+  | "downloads"
+  | "system"
+  | "caches"
+  | "other";
+
+export type EntityKind = "app" | "game" | "project" | "folder" | "fileType" | "system" | "cache" | "hidden";
+
+export interface EntitySummary {
+  id: number;
+  category: StorageCategory;
+  kind: EntityKind;
+  name: string;
+  detail: string | null;
+  size: number;
+  /** files / data / cache / build & deps */
+  buckets: [number, number, number, number];
+  files: number;
+  reclaimable: number;
+  canUninstall: boolean;
+  canClearCache: boolean;
+  canCleanBuild: boolean;
+  locations: number;
+  mtime: number;
+}
+
+export interface StorageView {
+  total: number;
+  used: number | null;
+  free: number | null;
+  capacity: number | null;
+  isVolume: boolean;
+  generation: number;
+  categories: { category: StorageCategory; size: number; count: number }[];
+  entities: EntitySummary[];
+}
+
+export type UninstallInfo =
+  | { type: "command"; command: string }
+  | { type: "url"; url: string; label: string }
+  | { type: "launcher"; name: string; url: string | null }
+  | { type: "settings" }
+  | { type: "trashBundle"; path: string };
+
+export interface EntityDetails {
+  entity: EntitySummary;
+  locations: { node: number; path: string; bucket: number; bytes: number; isDir: boolean }[];
+  cachePaths: string[];
+  buildPaths: [string, number][];
+  uninstall: UninstallInfo | null;
+}
+
+export interface ActionReport {
+  message: string;
+  freed: number;
+  failed: number;
+  summary: Summary | null;
+}
+
+export const storageApi = {
+  storage: () => invoke<StorageView>("get_storage"),
+  entity: (id: number) => invoke<EntityDetails>("get_entity", { id }),
+  action: (id: number, action: "uninstall" | "clearCache" | "cleanBuild" | "refresh") =>
+    invoke<ActionReport>("entity_action", { id, action }),
+};

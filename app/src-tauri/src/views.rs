@@ -4,7 +4,7 @@ use crate::tree::*;
 use serde::Serialize;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -313,6 +313,14 @@ fn same_name(a: &str, b: &str) -> bool {
 
 /// Find the live node for an absolute path inside the scanned tree.
 pub fn find_by_path(tree: &Tree, path: &Path) -> Option<u32> {
+    // Registry values sometimes use forward slashes ("C:/Riot Games/...").
+    let fixed;
+    let path = if cfg!(windows) && path.to_string_lossy().contains('/') {
+        fixed = PathBuf::from(path.to_string_lossy().replace('/', "\\"));
+        fixed.as_path()
+    } else {
+        path
+    };
     let root = Path::new(&tree.root_path);
     let rel = if cfg!(windows) {
         let p = path.to_string_lossy().to_lowercase();
@@ -403,6 +411,10 @@ mod tests {
         assert_eq!(t.name(id), "f49.mp4");
         if cfg!(windows) {
             assert!(find_by_path(&t, Path::new(r"c:\DATA\sub")).is_some());
+            assert!(
+                find_by_path(&t, Path::new("C:/data/Sub")).is_some(),
+                "registry paths may use forward slashes"
+            );
         }
         assert_eq!(find_by_path(&t, &t.path(0)), Some(0));
     }

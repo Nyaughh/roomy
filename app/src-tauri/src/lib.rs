@@ -1,9 +1,11 @@
 //! Roomy: Tauri commands and app state.
 
+pub mod catalog;
 pub mod delete;
 pub mod dupes;
 pub mod safety;
 pub mod scan;
+pub mod storage;
 pub mod suggest;
 pub mod system;
 pub mod tree;
@@ -56,6 +58,9 @@ pub struct Summary {
 struct ScanData {
     tree: Tree,
     summary: Summary,
+    catalog: Arc<catalog::Catalog>,
+    /// Storage attribution, cached for the tree generation it was built from.
+    storage: Option<Arc<storage::Storage>>,
 }
 
 struct AppState {
@@ -374,7 +379,14 @@ fn run_scan(
         elevated,
         generation: tree.generation,
     };
-    Some(ScanData { tree, summary })
+    // What's installed (registry, launchers). Cheap: no disk walk.
+    let catalog = Arc::new(catalog::load());
+    Some(ScanData {
+        tree,
+        summary,
+        catalog,
+        storage: None,
+    })
 }
 
 #[tauri::command]
@@ -797,6 +809,293 @@ fn cancel_duplicates(state: St) {
     state.dupes_cancel.lock().store(true, Ordering::SeqCst);
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntitySummary {
+    id: u32,
+    category: storage::Category,
+    kind: storage::EntityKind,
+    name: String,
+    detail: Option<String>,
+    size: u64,
+    buckets: [u64; 4],
+    files: u64,
+    reclaimable: u64,
+    can_uninstall: bool,
+    can_clear_cache: bool,
+    can_clean_build: bool,
+    locations: usize,
+    mtime: i64,
+}
+
+fn entity_summary(e: &storage::Entity) -> EntitySummary {
+    EntitySummary {
+        id: e.id,
+        category: e.category,
+        kind: e.kind,
+        name: e.name.clone(),
+        detail: e.detail.clone(),
+        size: e.size,
+        buckets: e.buckets,
+        files: e.files,
+        reclaimable: e.reclaimable(),
+        can_uninstall: e.uninstall.is_some(),
+        can_clear_cache: !e.cache_dirs.is_empty() && e.buckets[storage::B_CACHE as usize] > 0,
+        can_clean_build: !e.junk_dirs.is_empty() && e.buckets[storage::B_BUILD as usize] > 0,
+        locations: e.locations.len(),
+        mtime: e.mtime,
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageView {
+    total: u64,
+    used: Option<u64>,
+    free: Option<u64>,
+    capacity: Option<u64>,
+    is_volume: bool,
+    generation: u64,
+    categories: Vec<storage::CategoryTotal>,
+    entities: Vec<EntitySummary>,
+}
+
+/// Build (or reuse) the storage attribution for the current tree.
+fn storage_for(d: &mut ScanData) -> Arc<storage::Storage> {
+    if let Some(s) = &d.storage {
+        if s.generation == d.tree.generation {
+            return s.clone();
+        }
+    }
+    let s = Arc::new(storage::attribute(
+        &d.tree,
+        &d.catalog,
+        &storage::Env::system(),
+        d.summary.is_volume,
+    ));
+    d.storage = Some(s.clone());
+    s
+}
+
+#[tauri::command]
+async fn get_storage(app: AppHandle) -> Result<StorageView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut g = state.data.write();
+        let d = g.as_mut().ok_or("No scan yet.")?;
+        let s = storage_for(d);
+        let mut entities: Vec<EntitySummary> = s
+            .entities
+            .iter()
+            .filter(|e| e.size > 0)
+            .map(entity_summary)
+            .collect();
+        entities.sort_by_key(|e| std::cmp::Reverse(e.size));
+        Ok(StorageView {
+            total: s.total,
+            used: d.summary.used,
+            free: d.summary.volume_free,
+            capacity: d.summary.volume_total,
+            is_volume: d.summary.is_volume,
+            generation: s.generation,
+            categories: s.categories.clone(),
+            entities,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocationView {
+    node: u32,
+    path: String,
+    bucket: u8,
+    bytes: u64,
+    is_dir: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntityDetails {
+    entity: EntitySummary,
+    locations: Vec<LocationView>,
+    cache_paths: Vec<String>,
+    build_paths: Vec<(String, u64)>,
+    uninstall: Option<catalog::Uninstall>,
+}
+
+#[tauri::command]
+fn get_entity(state: St, id: u32) -> Result<EntityDetails, String> {
+    let mut g = state.data.write();
+    let d = g.as_mut().ok_or("No scan yet.")?;
+    let s = storage_for(d);
+    let e = s
+        .entities
+        .get(id as usize)
+        .ok_or("That item is no longer there.")?;
+    let tree = &d.tree;
+    let path_of = |n: u32| -> Option<String> {
+        tree.get(n)?;
+        (!tree.is_pseudo(n)).then(|| tree.path(n).to_string_lossy().into_owned())
+    };
+    Ok(EntityDetails {
+        entity: entity_summary(e),
+        locations: e
+            .locations
+            .iter()
+            .filter(|l| tree.get(l.node).is_some())
+            .map(|l| LocationView {
+                node: l.node,
+                path: path_of(l.node).unwrap_or_else(|| tree.name(l.node).to_string()),
+                bucket: l.bucket,
+                bytes: l.bytes,
+                is_dir: tree.nodes[l.node as usize].kind != KIND_FILE,
+            })
+            .collect(),
+        cache_paths: e.cache_dirs.iter().filter_map(|&n| path_of(n)).collect(),
+        build_paths: e
+            .junk_dirs
+            .iter()
+            .filter_map(|&n| Some((path_of(n)?, tree.nodes[n as usize].size)))
+            .collect(),
+        uninstall: e.uninstall.clone(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionReport {
+    message: String,
+    freed: u64,
+    failed: u64,
+    summary: Option<Summary>,
+}
+
+type Targets = Vec<(u32, PathBuf)>;
+
+#[tauri::command]
+async fn entity_action(app: AppHandle, id: u32, action: String) -> Result<ActionReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        // Resolve targets from Roomy's own attribution, never from the UI.
+        let (targets, uninstall, locations): (Targets, Option<catalog::Uninstall>, Targets) = {
+            let mut g = state.data.write();
+            let d = g.as_mut().ok_or("No scan yet.")?;
+            let s = storage_for(d);
+            let e = s
+                .entities
+                .get(id as usize)
+                .ok_or("That item is no longer there.")?;
+            let list = match action.as_str() {
+                "clearCache" => e.cache_dirs.clone(),
+                "cleanBuild" => e.junk_dirs.clone(),
+                _ => Vec::new(),
+            };
+            let live = |n: &u32| d.tree.get(*n).is_some() && !d.tree.is_pseudo(*n);
+            (
+                list.iter()
+                    .filter(|n| live(n))
+                    .map(|&n| (n, d.tree.path(n)))
+                    .collect(),
+                e.uninstall.clone(),
+                e.locations
+                    .iter()
+                    .map(|l| l.node)
+                    .filter(live)
+                    .map(|n| (n, d.tree.path(n)))
+                    .collect(),
+            )
+        };
+        match action.as_str() {
+            "uninstall" => {
+                let u = uninstall.ok_or("Roomy doesn't know how to uninstall this one.")?;
+                let message = system::run_uninstall(&u)?;
+                Ok(ActionReport {
+                    message,
+                    freed: 0,
+                    failed: 0,
+                    summary: None,
+                })
+            }
+            "refresh" => {
+                let mut g = state.data.write();
+                let d = g.as_mut().ok_or("No scan yet.")?;
+                let before = d.tree.nodes[0].size;
+                for (n, p) in &locations {
+                    sync_path(d, *n, p);
+                }
+                refresh_summary(d);
+                Ok(ActionReport {
+                    message: "Updated.".into(),
+                    freed: before.saturating_sub(d.tree.nodes[0].size),
+                    failed: 0,
+                    summary: Some(d.summary.clone()),
+                })
+            }
+            "clearCache" | "cleanBuild" => {
+                let mut failed = 0;
+                let mut errors = Vec::new();
+                for (_, p) in &targets {
+                    let r = if action == "clearCache" {
+                        delete::delete_contents(&state.guard, p, None)
+                    } else {
+                        delete::delete_path(&state.guard, p, Mode::Permanent)
+                    };
+                    match r {
+                        Ok(st) => {
+                            failed += st.failed;
+                            if let Some(e) = st.first_error {
+                                errors.push(e);
+                            }
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            errors.push(e);
+                        }
+                    }
+                }
+                let mut g = state.data.write();
+                let d = g.as_mut().ok_or("No scan yet.")?;
+                let before = d.tree.nodes[0].size;
+                for (n, p) in &targets {
+                    sync_path(d, *n, p);
+                }
+                refresh_summary(d);
+                let freed = before.saturating_sub(d.tree.nodes[0].size);
+                Ok(ActionReport {
+                    message: match errors.first() {
+                        Some(e) if failed > 0 => format!("Freed {}. {e}", fmt_bytes(freed)),
+                        _ => format!("Freed {}.", fmt_bytes(freed)),
+                    },
+                    freed,
+                    failed,
+                    summary: Some(d.summary.clone()),
+                })
+            }
+            _ => Err("Unknown action.".into()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn fmt_bytes(b: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = b as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{b} B")
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = AppState {
@@ -831,6 +1130,9 @@ pub fn run() {
             clean_suggestions,
             find_duplicates,
             cancel_duplicates,
+            get_storage,
+            get_entity,
+            entity_action,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Roomy");

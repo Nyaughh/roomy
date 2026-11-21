@@ -384,6 +384,118 @@ mod imp {
 
 pub use imp::*;
 
+/// Start an app's own uninstaller (or open the place where it's uninstalled).
+/// Roomy never deletes an installed app's files itself.
+pub fn run_uninstall(u: &crate::catalog::Uninstall) -> Result<String, String> {
+    use crate::catalog::Uninstall;
+    match u {
+        Uninstall::Command { command } => launch_command(command)
+            .map(|_| "The app's uninstaller is open. Follow its steps, then press Refresh.".into()),
+        Uninstall::Url { url, label } => open_target(url)
+            .map(|_| format!("Opened {label}. Follow the steps there, then press Refresh.")),
+        Uninstall::Launcher { name, url } => match url {
+            Some(u) => {
+                open_target(u).map(|_| format!("Uninstall it from {name}, then press Refresh."))
+            }
+            None => Err(format!("Open {name} to uninstall this.")),
+        },
+        Uninstall::Settings => open_target(if cfg!(windows) {
+            "ms-settings:appsfeatures"
+        } else {
+            "x-apple.systempreferences:"
+        })
+        .map(|_| "Uninstall it from Settings ▸ Apps, then press Refresh.".into()),
+        Uninstall::TrashBundle { path } => trash::delete(path)
+            .map(|_| "Moved the app to the Trash.".into())
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// Split a registry command line into the program and its arguments.
+pub fn split_command(cmd: &str) -> (String, String) {
+    let cmd = cmd.trim();
+    if let Some(rest) = cmd.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            return (rest[..end].to_string(), rest[end + 1..].trim().to_string());
+        }
+    }
+    let lower = cmd.to_lowercase();
+    if let Some(i) = lower.find(".exe") {
+        return (cmd[..i + 4].to_string(), cmd[i + 4..].trim().to_string());
+    }
+    match cmd.split_once(' ') {
+        Some((a, b)) => (a.to_string(), b.trim().to_string()),
+        None => (cmd.to_string(), String::new()),
+    }
+}
+
+#[cfg(windows)]
+fn shell_open(file: &str, args: Option<&str>) -> Result<(), String> {
+    use crate::scan::platform::to_wide;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let verb = to_wide("open");
+    let f = to_wide(file);
+    let a = args.map(to_wide);
+    let r = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            f.as_ptr(),
+            a.as_ref().map(|a| a.as_ptr()).unwrap_or(std::ptr::null()),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (r as isize) > 32 {
+        Ok(())
+    } else {
+        Err("Windows couldn't start it.".into())
+    }
+}
+
+#[cfg(windows)]
+fn launch_command(command: &str) -> Result<(), String> {
+    if command.to_lowercase().contains("msiexec") {
+        // Always uninstall (/x), never re-run an install (/i).
+        if let (Some(a), Some(b)) = (command.find('{'), command.find('}')) {
+            if a < b {
+                return shell_open("msiexec.exe", Some(&format!("/x {}", &command[a..=b])));
+            }
+        }
+    }
+    let (exe, args) = split_command(command);
+    shell_open(&exe, (!args.is_empty()).then_some(args.as_str()))
+}
+
+#[cfg(not(windows))]
+fn launch_command(command: &str) -> Result<(), String> {
+    let (exe, args) = split_command(command);
+    std::process::Command::new(exe)
+        .args(args.split_whitespace())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn open_target(target: &str) -> Result<(), String> {
+    shell_open(target, None)
+}
+
+#[cfg(not(windows))]
+fn open_target(target: &str) -> Result<(), String> {
+    std::process::Command::new(if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    })
+    .arg(target)
+    .spawn()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 /// Mount point of the volume containing `path`, if `path` *is* a mount point.
 pub fn is_volume_root(path: &Path) -> bool {
     list_volumes().iter().any(|v| {
@@ -396,4 +508,23 @@ pub fn is_volume_root(path: &Path) -> bool {
             a == b || (v.path == "/" && b.is_empty())
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_command;
+
+    #[test]
+    fn splits_uninstall_commands() {
+        let (exe, args) = split_command("\"C:/Program Files/App/uninst.exe\" /S");
+        assert_eq!(
+            (exe.as_str(), args.as_str()),
+            ("C:/Program Files/App/uninst.exe", "/S")
+        );
+        let (exe, args) = split_command("C:/Program Files/App/unins000.exe /SILENT");
+        assert_eq!(
+            (exe.as_str(), args.as_str()),
+            ("C:/Program Files/App/unins000.exe", "/SILENT")
+        );
+    }
 }
