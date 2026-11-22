@@ -6,6 +6,7 @@ import { bytes, percent } from "../format";
 import { Mark } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
 import { useToasts } from "./Toasts";
+import { UpdateButton } from "./Updater";
 
 export function Home({ info, onScan }: { info: AppInfo | null; onScan: (path: string) => void }) {
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
@@ -39,7 +40,10 @@ export function Home({ info, onScan }: { info: AppInfo | null; onScan: (path: st
             <Mark size={24} />
             Roomy
           </div>
-          <ThemeToggle />
+          <div style={{ display: "flex", gap: 4 }}>
+            <UpdateButton version={info?.version} />
+            <ThemeToggle />
+          </div>
         </div>
         <h1>
           Make <span className="room-mark">room.</span>

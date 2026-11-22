@@ -12,6 +12,7 @@ import { Suggestions } from "./Suggestions";
 import { ThemeToggle } from "./ThemeToggle";
 import { useToasts } from "./Toasts";
 import { Types } from "./Types";
+import { UpdateButton } from "./Updater";
 
 type Tab = "storage" | "explore" | "types" | "largest" | "suggestions";
 
@@ -156,6 +157,7 @@ export function Results({
               <House /> New scan
             </button>
             <span style={{ flex: 1 }} />
+            <UpdateButton version={info?.version} />
             <ThemeToggle />
           </div>
         </aside>

@@ -1663,6 +1663,59 @@ kbd {
   color: var(--viz-label);
   flex: none;
 }
+/* Real app icons keep the same rounded tile, on a soft wash of the category colour. */
+.avatar.has-icon {
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.avatar.has-icon img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  animation: icon-in var(--dur-fast) var(--ease);
+}
+/* Launcher art (Steam) is a square picture: fill the tile. */
+.avatar.has-icon.art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar.lg {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  font-size: 17px;
+}
+.avatar.lg.has-icon img {
+  width: 30px;
+  height: 30px;
+}
+.avatar.lg.has-icon.art img {
+  width: 100%;
+  height: 100%;
+}
+@keyframes icon-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar.has-icon img {
+    animation: none;
+  }
+}
+.ent-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ent-title > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .ent-total {
   font-size: 28px;
   font-weight: 600;
@@ -1673,4 +1726,79 @@ kbd {
   font-weight: 600;
   margin: 6px 0 8px;
   color: var(--ink-2);
+}
+
+/* ---------- Update prompt ---------- */
+
+.update-card {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 70;
+  width: min(360px, calc(100vw - 40px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-card);
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  animation: pop 0.2s var(--ease);
+}
+.update-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.update-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-tile);
+  background: var(--butter-wash);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.update-title {
+  font-weight: 650;
+}
+.update-sub {
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.update-bar {
+  height: 6px;
+}
+.update-bar .fill {
+  transition: width var(--dur-base) var(--ease);
+}
+/* Toasts stack above the update card instead of covering it. */
+body:has(.update-card) .toasts {
+  bottom: 190px;
+}
+.update-btn {
+  position: relative;
+}
+.update-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--butter);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-card {
+    animation: none;
+  }
 }

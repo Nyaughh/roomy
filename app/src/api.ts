@@ -261,6 +261,8 @@ export interface EntitySummary {
   canCleanBuild: boolean;
   locations: number;
   mtime: number;
+  /** Key for the app's real icon (see icons.ts), when Roomy knows where it is. */
+  icon: string | null;
 }
 
 export interface StorageView {

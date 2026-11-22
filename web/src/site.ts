@@ -4,7 +4,7 @@ export const SITE = {
   url: "https://roomy.lh3k.dev",
   description:
     "Roomy is a free and open-source (MIT) storage analyzer and cleaner for Windows and macOS. Storage, like your phone's, but it shows everything: every app with its data and caches, every hidden gigabyte. Then clear space safely.",
-  version: "0.1.0",
+  version: "0.1.1",
   repo: "https://github.com/Nyaughh/roomy",
 } as const;
 

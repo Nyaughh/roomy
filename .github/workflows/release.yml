@@ -1,11 +1,19 @@
 name: Release
 
-# Push a tag like v0.1.0 to build installers and publish them to a GitHub
+# Push a tag like v0.1.1 to build installers and publish them to a GitHub
 # Release. Assets get stable names so these links always point at the newest
 # version:
 #   https://github.com/Nyaughh/roomy/releases/latest/download/Roomy-setup-x64.exe
 #   https://github.com/Nyaughh/roomy/releases/latest/download/Roomy-x64.msi
 #   https://github.com/Nyaughh/roomy/releases/latest/download/Roomy-macos.dmg
+#
+# Auto-updates: builds are signed with the updater key (repository secrets
+# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD), each
+# updater artifact gets a .sig next to it, and the last job writes
+# latest.json, which the app reads from
+#   https://github.com/Nyaughh/roomy/releases/latest/download/latest.json
+# The release stays a draft until every platform and latest.json are
+# uploaded, so installed apps never see a half-published update.
 on:
   push:
     tags: ["v*"]
@@ -18,16 +26,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Create the GitHub Release
+      - name: Check the tag matches the app version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(jq -r .version app/src-tauri/tauri.conf.json)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG doesn't match the app version $version in tauri.conf.json"
+            exit 1
+          fi
+      - name: Create the GitHub Release (draft)
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "Roomy ${TAG#v}" --notes "Roomy ${TAG#v}. Make room.
+            gh release create "$TAG" --draft --title "Roomy ${TAG#v}" --notes "Roomy ${TAG#v}. Make room.
 
           **Windows:** download \`Roomy-setup-x64.exe\` (or \`Roomy-x64.msi\`).
           **macOS:** download \`Roomy-macos.dmg\` (Apple Silicon and Intel).
+
+          Already have Roomy 0.1.1 or later? It offers this update by itself.
 
           These builds aren't code-signed yet. On Windows choose *More info → Run anyway* in SmartScreen; on macOS right-click Roomy and choose *Open* the first time."
           fi
@@ -62,8 +81,11 @@ jobs:
       - name: Install frontend dependencies
         working-directory: app
         run: pnpm install --frozen-lockfile
-      - name: Build installers
+      - name: Build installers and signed updater artifacts
         uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           tauriScript: pnpm tauri
@@ -71,12 +93,22 @@ jobs:
       - name: Collect installers with stable names
         shell: bash
         run: |
+          set -euo pipefail
+          v=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
           mkdir -p out
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp app/src-tauri/target/release/bundle/nsis/*-setup.exe out/Roomy-setup-x64.exe
-            cp app/src-tauri/target/release/bundle/msi/*.msi out/Roomy-x64.msi
+            b=app/src-tauri/target/release/bundle
+            # The NSIS installer and the MSI double as updater artifacts.
+            cp "$b/nsis/Roomy_${v}_x64-setup.exe" out/Roomy-setup-x64.exe
+            cp "$b/nsis/Roomy_${v}_x64-setup.exe.sig" out/Roomy-setup-x64.exe.sig
+            cp "$b/msi/Roomy_${v}_x64_en-US.msi" out/Roomy-x64.msi
+            cp "$b/msi/Roomy_${v}_x64_en-US.msi.sig" out/Roomy-x64.msi.sig
           else
-            cp app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg out/Roomy-macos.dmg
+            b=app/src-tauri/target/universal-apple-darwin/release/bundle
+            cp "$b/dmg/Roomy_${v}_universal.dmg" out/Roomy-macos.dmg
+            # The updater downloads the app bundle as a signed tarball.
+            cp "$b/macos/Roomy.app.tar.gz" out/Roomy-macos.app.tar.gz
+            cp "$b/macos/Roomy.app.tar.gz.sig" out/Roomy-macos.app.tar.gz.sig
           fi
           ls -l out
       - name: Upload to the release
@@ -84,3 +116,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.ref_name }}" out/* --clobber
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write latest.json for the updater and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir sigs && cd sigs
+          gh release download "$TAG" --repo "$REPO" --pattern '*.sig'
+          base="https://github.com/$REPO/releases/download/$TAG"
+          entry() { jq -n --arg url "$base/$1" --rawfile sig "$1.sig" '{url: $url, signature: ($sig | rtrimstr("\n"))}'; }
+          jq -n \
+            --arg version "${TAG#v}" \
+            --arg notes "Roomy ${TAG#v}. Make room." \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson exe "$(entry Roomy-setup-x64.exe)" \
+            --argjson msi "$(entry Roomy-x64.msi)" \
+            --argjson mac "$(entry Roomy-macos.app.tar.gz)" \
+            '{version: $version, notes: $notes, pub_date: $date, platforms: {
+              "windows-x86_64": $exe,
+              "windows-x86_64-nsis": $exe,
+              "windows-x86_64-msi": $msi,
+              "darwin-aarch64": $mac,
+              "darwin-x86_64": $mac
+            }}' > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest

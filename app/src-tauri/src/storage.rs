@@ -13,7 +13,9 @@
 //! 3. Files nobody claims go to a file-type entity (photos, videos, music,
 //!    documents) or to an "Other" entity named after their top folder.
 
-use crate::catalog::{base_name, norm, norm_publisher, AppKind, AppRecord, Catalog, Uninstall};
+use crate::catalog::{
+    base_name, norm, norm_publisher, AppKind, AppRecord, Catalog, IconHint, Uninstall,
+};
 use crate::tree::*;
 use crate::views::{category_of, find_by_path};
 use serde::Serialize;
@@ -96,6 +98,9 @@ pub struct Entity {
     pub reclaim_build: u64,
     pub uninstall: Option<Uninstall>,
     pub mtime: i64,
+    /// Where this app's or game's icon may be found (read lazily by `icons`).
+    #[serde(skip)]
+    pub icons: Vec<IconHint>,
 }
 
 impl Entity {
@@ -116,6 +121,7 @@ impl Entity {
             reclaim_build: 0,
             uninstall: None,
             mtime: 0,
+            icons: Vec::new(),
         }
     }
 
@@ -755,6 +761,7 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
                 .clone()
                 .or_else(|| (app.source != "Windows").then(|| app.source.to_string()));
             ent.uninstall = app.uninstall.clone();
+            ent.icons = app.icons.clone();
             e
         };
         for d in &app.install_dirs {
@@ -800,6 +807,14 @@ pub fn attribute(tree: &Tree, catalog: &Catalog, env: &Env, is_volume: bool) -> 
                 let e = b.entity(Category::Games, EntityKind::Game, tree.name(g).to_string());
                 b.entities[e as usize].detail = Some("Xbox app".into());
                 b.entities[e as usize].uninstall = Some(Uninstall::Settings);
+                let dir = tree.path(g);
+                b.entities[e as usize].icons = vec![
+                    IconHint::Package {
+                        root: dir.join("Content"),
+                    },
+                    IconHint::Package { root: dir.clone() },
+                    IconHint::ExeIn { dir },
+                ];
                 b.claim_node(g, e, B_FILES);
             }
         }
@@ -1366,6 +1381,9 @@ fn attribute_walk(b: &mut Builder, env: &Env, is_volume: bool) -> Storage {
                             let mut ent =
                                 Entity::new(id, cat, EntityKind::Folder, aname.to_string());
                             ent.detail = Some(anchor_detail(tree, a, cat, env));
+                            if matches!(cat, Category::Apps | Category::Games) {
+                                ent.icons = vec![IconHint::ExeIn { dir: tree.path(a) }];
+                            }
                             ent.locations.push(Location {
                                 node: a,
                                 bucket: B_FILES,
@@ -1666,6 +1684,10 @@ mod tests {
         paint.uninstall = Some(Uninstall::Command {
             command: "uninst.exe".into(),
         });
+        paint.icons.push(IconHint::File {
+            path: r.join("Program Files").join("Acme Paint").join("paint.exe"),
+            index: 0,
+        });
         let mut game = AppRecord::new("Space Game", AppKind::Game, "Steam");
         game.install_dirs.push(r.join("Games").join("Space Game"));
         // A bogus registry entry pointing at Program Files itself must be ignored.
@@ -1685,6 +1707,23 @@ mod tests {
             .iter()
             .find(|e| e.name == name)
             .unwrap_or_else(|| panic!("no entity {name}"))
+    }
+
+    #[test]
+    fn apps_carry_their_icon_hints() {
+        let (tree, cat, env) = fixture();
+        let s = attribute(&tree, &cat, &env, true);
+        let paint = by_name(&s, "Acme Paint 2.1 (x64)");
+        assert_eq!(paint.icons, cat.apps[0].icons);
+        // Caches, file types and system items keep the letter tile.
+        assert!(s
+            .entities
+            .iter()
+            .filter(|e| !matches!(
+                e.kind,
+                EntityKind::App | EntityKind::Game | EntityKind::Folder
+            ))
+            .all(|e| e.icons.is_empty()));
     }
 
     #[test]
