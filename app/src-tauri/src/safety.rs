@@ -21,6 +21,23 @@ pub struct Guard {
     allowed: Vec<PathBuf>,
 }
 
+/// System folders that live at the top of a volume and must never be
+/// deleted, on any drive.
+#[cfg_attr(not(windows), allow(dead_code))]
+const PER_VOLUME_SYSTEM_DIRS: &[&str] = &[
+    "System Volume Information",
+    "$Recycle.Bin",
+    "Recovery",
+    "Boot",
+    "EFI",
+    "$WinREAgent",
+    "$SysReset",
+    "$Windows.~BT",
+    "$Windows.~WS",
+    "Config.Msi",
+    "Documents and Settings",
+];
+
 const PROTECTED_NAMES: &[&str] = &[
     "ntuser.dat",
     "ntuser.ini",
@@ -238,20 +255,14 @@ impl Guard {
             let drive = PathBuf::from(format!("{sys_drive}\\"));
             let windir = env("SystemRoot").unwrap_or_else(|| drive.join("Windows"));
             trees.push(windir.clone());
-            for t in [
-                "System Volume Information",
-                "$Recycle.Bin",
-                "Recovery",
-                "Boot",
-                "EFI",
-                "$WinREAgent",
-                "$SysReset",
-                "$Windows.~BT",
-                "$Windows.~WS",
-                "Config.Msi",
-                "Documents and Settings",
-            ] {
-                trees.push(drive.join(t));
+            // Per-volume system folders: protected at the top of every drive
+            // letter, not just the system drive (each volume has its own
+            // Recycle Bin, restore data, installer rollback folder, …).
+            for letter in b'A'..=b'Z' {
+                let root = PathBuf::from(format!("{}:\\", letter as char));
+                for t in PER_VOLUME_SYSTEM_DIRS {
+                    trees.push(root.join(t));
+                }
             }
             for k in [
                 "ProgramFiles",
@@ -634,5 +645,37 @@ mod tests {
         assert!(g
             .check_lexical(Path::new("/System/Volumes/Preboot/x"))
             .is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn per_volume_system_folders_are_blocked_on_every_drive() {
+        let g = Guard::system();
+        for p in [
+            r"D:\$Recycle.Bin",
+            r"D:\$RECYCLE.BIN\S-1-5-21-1-2-3-1001\$R0ABCDE.zip",
+            r"E:\System Volume Information",
+            r"E:\System Volume Information\{3808876b-c176-4e48-b7ae-04046e6cc752}",
+            r"Z:\Config.Msi\12345.rbf",
+            r"F:\Recovery\WindowsRE\Winre.wim",
+            r"G:\EFI\Microsoft\Boot\bootmgfw.efi",
+            r"D:\Boot",
+        ] {
+            assert!(
+                g.check_lexical(Path::new(p)).is_err(),
+                "{p} should be blocked"
+            );
+        }
+        // Ordinary data on those drives is still deletable.
+        for p in [
+            r"D:\Games\old",
+            r"E:\Photos\2019\img.jpg",
+            r"D:\Recycled stuff\a.txt",
+        ] {
+            assert!(
+                g.check_lexical(Path::new(p)).is_ok(),
+                "{p} should be allowed"
+            );
+        }
     }
 }
