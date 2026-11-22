@@ -7,8 +7,18 @@ dest='/Applications/Roomy.app'
 work=''
 stage=''
 mounted=''
+needs_admin=false
+replacing=false
 
 fail() { printf 'Roomy: %s\n' "$*" >&2; exit 1; }
+
+in_applications() {
+  if [ "$needs_admin" = true ]; then
+    sudo -n -- "$@" </dev/null
+  else
+    "$@"
+  fi
+}
 
 detach() {
   hdiutil detach "$mounted" >/dev/null || hdiutil detach -force "$mounted" >/dev/null
@@ -22,15 +32,16 @@ cleanup() {
   fi
   if [ -n "$work" ]; then
     # Never recursively delete a directory that may still contain a mounted disk.
+    rm -rf "$work/Roomy.app" || status=1
     rm -f "$work/Roomy-macos.dmg" || status=1
     if [ -d "$work/volume" ]; then rmdir "$work/volume" || status=1; fi
     rmdir "$work" || status=1
   fi
   if [ -n "$stage" ]; then
-    if [ -d "$stage/previous.app" ] && [ ! -e "$dest" ]; then
-      mv "$stage/previous.app" "$dest" || fail "Restore the previous copy from $stage/previous.app."
+    if [ "$replacing" = true ] && [ ! -e "$dest" ]; then
+      in_applications mv "$stage/previous.app" "$dest" || fail "Restore the previous copy from $stage/previous.app."
     fi
-    rm -rf "$stage" || status=1
+    in_applications rm -rf "$stage" || status=1
   fi
   exit "$status"
 }
@@ -55,16 +66,11 @@ quit_roomy() {
 
 main() {
   [ "$(uname -s)" = Darwin ] || fail 'This installer requires macOS.'
-  [ -w /Applications ] || fail 'Installing in /Applications requires administrator permission. Run this installer from an account that can write there.'
   trap cleanup EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
-  # Keep both bundles on the destination volume and prevent two installers swapping them at once.
-  mkdir -m 700 /Applications/.roomy-install ||
-    fail 'Could not create /Applications/.roomy-install. Check write access and whether another install is in progress.'
-  stage=/Applications/.roomy-install
   work=$(mktemp -d "${TMPDIR:-/tmp}/roomy.XXXXXX")
   printf 'Downloading the latest Roomy for macOS…\n'
   curl -fsSL --proto '=https' --retry 3 -o "$work/Roomy-macos.dmg" "$url" ||
@@ -77,17 +83,34 @@ main() {
   fi
   [ -d "$mounted/Roomy.app" ] || fail 'Roomy.app is missing from the disk image.'
   is_roomy "$mounted/Roomy.app" || fail 'The disk image does not contain the expected Roomy app.'
-  ditto "$mounted/Roomy.app" "$stage/Roomy.app"
+  ditto "$mounted/Roomy.app" "$work/Roomy.app"
   detach || fail 'Could not eject Roomy-macos.dmg.'
   mounted=''
-  xattr -rds com.apple.quarantine "$stage/Roomy.app" || fail 'Could not clear the download flag on Roomy.app.'
+  xattr -rds com.apple.quarantine "$work/Roomy.app" || fail 'Could not clear the download flag on Roomy.app.'
+
+  if [ ! -w /Applications ]; then
+    printf 'Writing to /Applications requires administrator permission. Using sudo for the installation.\n' >&2
+    # sudo prompts on the controlling terminal. Keep the piped script off its stdin.
+    sudo -v </dev/null ||
+      fail 'Could not obtain administrator permission. Run the installer in Terminal from an administrator account.'
+    needs_admin=true
+  fi
+
+  # Keep both bundles on the destination volume and prevent two installers swapping them at once.
+  in_applications mkdir -m 700 /Applications/.roomy-install ||
+    fail 'Could not create /Applications/.roomy-install. Check write access and whether another install is in progress.'
+  stage=/Applications/.roomy-install
+  in_applications mv "$work/Roomy.app" "$stage/Roomy.app"
 
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     is_roomy "$dest" || fail "A different item already exists at $dest."
   fi
   quit_roomy
-  if [ -d "$dest" ]; then mv "$dest" "$stage/previous.app"; fi
-  mv "$stage/Roomy.app" "$dest"
+  if [ -d "$dest" ]; then
+    replacing=true
+    in_applications mv "$dest" "$stage/previous.app"
+  fi
+  in_applications mv "$stage/Roomy.app" "$dest"
   printf 'Installed Roomy. Open it from Applications.\n'
 }
 
