@@ -1,9 +1,8 @@
 ---
 import Icon from "./Icon.astro";
 import Glyph from "./Glyph.astro";
+import MacInstallCommand from "./MacInstallCommand.astro";
 import { LINKS, SITE } from "../site";
-
-const xattr = "xattr -dr com.apple.quarantine /Applications/Roomy.app";
 ---
 
 <section id="download" class="section download" aria-labelledby="download-title">
@@ -45,27 +44,18 @@ const xattr = "xattr -dr com.apple.quarantine /Applications/Roomy.app";
           </div>
           <span class="yours">Your system</span>
         </div>
-        <a class="btn dl" href={LINKS.macDmg}><Icon name="download" /> Download for Mac (.dmg)</a>
-        <p class="alt">One universal app for Apple silicon and Intel Macs on macOS 10.15 or later.</p>
-        <ol class="install">
-          <li>Open <code>Roomy-macos.dmg</code> and drag Roomy into Applications.</li>
-          <li>
-            Roomy isn't notarized yet, so the first launch takes one extra step: <strong>Control-click</strong> Roomy in
-            Applications, choose <strong>Open</strong>, then <strong>Open</strong> again. On newer macOS, use{" "}
-            <strong>System Settings › Privacy &amp; Security › Open Anyway</strong>.
-          </li>
-          <li>
-            Still blocked? Clear the download flag in Terminal:
-            <span class="cmd">
-              <code set:html={xattr.replace(" /", " /<wbr>").replace("/Roomy", "/<wbr>Roomy")} />
-              <button type="button" class="copy" data-copy={xattr} aria-label="Copy command">
-                <Icon name="copy" size={15} />
-                <span class="copy-label">Copy</span>
-              </button>
-            </span>
-          </li>
-          <li>For the most complete scan, give Roomy <strong>Full Disk Access</strong> in System Settings › Privacy &amp; Security.</li>
-        </ol>
+        <div class="terminal-install">
+          <MacInstallCommand />
+          <p class="alt">
+            The installer quits Roomy if it’s running, copies the latest version to Applications and clears its download
+            flag. <a class="prose-link" href="/install.sh">Read the script</a>.
+          </p>
+        </div>
+        <p class="manual">
+          Prefer Finder? <a class="prose-link" href={LINKS.macDmg}>Download the .dmg</a> and drag Roomy into Applications.
+          If macOS blocks the first launch, choose <strong>Open Anyway</strong> in System Settings › Privacy &amp; Security.
+        </p>
+        <p class="alt">For the most complete scan, give Roomy <strong>Full Disk Access</strong> in Privacy &amp; Security.</p>
       </article>
     </div>
 
@@ -76,23 +66,6 @@ const xattr = "xattr -dr com.apple.quarantine /Applications/Roomy.app";
     </p>
   </div>
 </section>
-
-<script>
-  document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const label = btn.querySelector(".copy-label");
-      try {
-        await navigator.clipboard.writeText(btn.dataset.copy ?? "");
-        if (label) label.textContent = "Copied";
-      } catch {
-        if (label) label.textContent = "Select it";
-      }
-      setTimeout(() => {
-        if (label) label.textContent = "Copy";
-      }, 1800);
-    });
-  });
-</script>
 
 <style>
   .head {
@@ -183,14 +156,12 @@ const xattr = "xattr -dr com.apple.quarantine /Applications/Roomy.app";
   }
   /* the detected platform (or both, when unknown) gets the butter button */
   :global([data-os="win"]) .plat-win .dl,
-  :global([data-os="mac"]) .plat-mac .dl,
   :global([data-os="other"]) .dl {
     background: var(--butter);
     color: var(--butter-ink);
     border-color: transparent;
   }
   :global([data-os="win"]) .plat-win .dl:hover,
-  :global([data-os="mac"]) .plat-mac .dl:hover,
   :global([data-os="other"]) .dl:hover {
     background: var(--butter-hover);
   }
@@ -237,43 +208,12 @@ const xattr = "xattr -dr com.apple.quarantine /Applications/Roomy.app";
     color: var(--ink);
     overflow-wrap: anywhere;
   }
-  .cmd {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.6rem;
-    padding: 0.6rem 0.6rem 0.6rem 0.85rem;
-    border-radius: var(--radius-field);
-    background: var(--sunken);
+  .terminal-install, .manual {
+    margin-top: 1.75rem;
   }
-  .cmd code {
-    flex: 1 1 12rem;
-    min-width: 0;
-    padding: 0;
-    background: none;
-    font-size: 0.8rem;
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-  }
-  .copy {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    flex: none;
-    height: 32px;
-    padding: 0 0.8rem;
-    border-radius: var(--radius-pill);
-    border: 1px solid var(--line-strong);
-    background: var(--surface);
-    color: var(--ink);
-    font: inherit;
-    font-size: 0.8rem;
-    font-weight: 560;
-    cursor: pointer;
-  }
-  .copy:hover {
-    border-color: var(--ink-2);
+  .manual {
+    font-size: 0.95rem;
+    color: var(--ink-2);
   }
 
   .foot-note {

@@ -1,6 +1,7 @@
 ---
 import ProductWindow from "./ProductWindow.astro";
 import Icon from "./Icon.astro";
+import MacInstallCommand from "./MacInstallCommand.astro";
 import { LINKS, SITE } from "../site";
 ---
 
@@ -15,9 +16,11 @@ import { LINKS, SITE } from "../site";
       </p>
 
       <div class="ctas">
-        <!-- The visitor's OS (set in <head>) picks the primary button; the other platform stays one click away. -->
+        <div class="mac-install for-mac">
+          <MacInstallCommand />
+        </div>
         <a class="btn btn-primary for-win" href={LINKS.windowsExe}><Icon name="download" /> Download for Windows</a>
-        <a class="btn btn-primary for-mac" href={LINKS.macDmg}><Icon name="download" /> Download for Mac</a>
+        <a class="link-arrow for-mac" href={LINKS.macDmg}>Download the .dmg <Icon name="download" /></a>
         <a class="btn btn-primary for-other" href="#download"><Icon name="download" /> Download</a>
         <a class="link-arrow alt" href="#download">
           <span class="for-win-t">Also for Mac</span><span class="for-mac-t">Also for Windows</span><span class="for-other-t">Windows and Mac</span>
@@ -73,6 +76,10 @@ import { LINKS, SITE } from "../site";
   .ctas .btn {
     --h: 52px;
     padding-inline: 1.6rem;
+  }
+  .mac-install {
+    flex-basis: 100%;
+    justify-content: center;
   }
   .req {
     margin-top: 1rem;

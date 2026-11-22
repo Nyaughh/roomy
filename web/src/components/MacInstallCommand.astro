@@ -1,0 +1,98 @@
+---
+import Icon from "./Icon.astro";
+import { SITE } from "../site";
+
+const command = `curl -fsSL ${SITE.url}/install.sh | bash`;
+---
+
+<div class="mac-command">
+  <p class="prompt">Paste into Terminal to install Roomy</p>
+  <div class="cmd">
+    <code>{command}</code>
+    <button type="button" class="copy" hidden aria-label="Copy Mac install command">
+      <Icon name="copy" size={15} />
+      <span>Copy</span>
+    </button>
+    <span class="sr-only" role="status"></span>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll(".mac-command").forEach((field) => {
+    const button = field.querySelector("button");
+    const code = field.querySelector("code");
+    const label = button?.querySelector("span");
+    const status = field.querySelector('[role="status"]');
+    if (!button || !code || !label || !status) return;
+    button.hidden = false;
+    let reset: number;
+    button.addEventListener("click", async () => {
+      window.clearTimeout(reset);
+      try {
+        await navigator.clipboard.writeText(code.textContent ?? "");
+        label.textContent = "Copied";
+        status.textContent = "Install command copied.";
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(code);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        label.textContent = "Press ⌘C";
+        status.textContent = "Press Command C to copy the selected command.";
+      }
+      reset = window.setTimeout(() => {
+        label.textContent = "Copy";
+        status.textContent = "";
+      }, 2400);
+    });
+  });
+</script>
+
+<style>
+  .prompt {
+    margin-bottom: 0.5rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+  }
+  .cmd {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.6rem 0.6rem 1rem;
+    border-radius: var(--radius-field);
+    background: var(--sunken);
+    text-align: left;
+  }
+  .cmd code {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+  .copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    flex: none;
+    min-height: 36px;
+    padding: 0 0.8rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    background: var(--butter);
+    color: var(--butter-ink);
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 560;
+    cursor: pointer;
+  }
+  .copy:hover {
+    background: var(--butter-hover);
+  }
+  .copy[hidden] {
+    display: none;
+  }
+</style>
