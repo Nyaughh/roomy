@@ -28,6 +28,7 @@ import {
 import { bytes, date, middleTruncate, percent, plural } from "../format";
 import { binName, useDelete } from "./DeleteFlow";
 import { Dialog } from "./Dialog";
+import { EntityIcon } from "./EntityIcon";
 import { useToasts } from "./Toasts";
 
 /** Category order, labels and brand colours (brand/tokens.json "storageCategories"). */
@@ -57,15 +58,6 @@ function breakdown(e: EntitySummary): string | null {
     .map((b, i) => (b > 0 ? `${i === 0 && e.kind === "project" ? "source" : BUCKETS[i]} ${bytes(b)}` : null))
     .filter(Boolean);
   return parts.length > 1 ? parts.join(" · ") : null;
-}
-
-function Avatar({ name, viz }: { name: string; viz: string }) {
-  const letter = (name.match(/[A-Za-z0-9]/)?.[0] ?? "?").toUpperCase();
-  return (
-    <div className="avatar" style={{ background: `var(--viz-${viz})` }} aria-hidden>
-      {letter}
-    </div>
-  );
 }
 
 export function Storage({
@@ -204,7 +196,7 @@ export function Storage({
                       {e.kind === "hidden" ? (
                         <div className="avatar hatched" aria-hidden />
                       ) : (
-                        <Avatar name={e.name} viz={meta.viz} />
+                        <EntityIcon name={e.name} viz={meta.viz} iconKey={e.icon} />
                       )}
                       <div className="ent-main">
                         <div className="ent-name">{e.name}</div>
@@ -384,7 +376,12 @@ function EntityDialog({
   return (
     <Dialog
       wide
-      title={e.name}
+      title={
+        <span className="ent-title">
+          {e.kind !== "hidden" && <EntityIcon name={e.name} viz={meta.viz} iconKey={e.icon} size="lg" />}
+          <span>{e.name}</span>
+        </span>
+      }
       description={[meta.label, e.detail, e.kind === "project" && e.mtime ? `changed ${date(e.mtime).toLowerCase()}` : null]
         .filter(Boolean)
         .join(" · ")}

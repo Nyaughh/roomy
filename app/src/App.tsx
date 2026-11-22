@@ -4,6 +4,7 @@ import { Home } from "./components/Home";
 import { Results } from "./components/Results";
 import { Scanning } from "./components/Scanning";
 import { ToastProvider, useToasts } from "./components/Toasts";
+import { UpdaterProvider } from "./components/Updater";
 
 type Screen = { kind: "home" } | { kind: "scanning"; path: string } | { kind: "results" };
 
@@ -80,7 +81,9 @@ function Main() {
 export function App() {
   return (
     <ToastProvider>
-      <Main />
+      <UpdaterProvider>
+        <Main />
+      </UpdaterProvider>
     </ToastProvider>
   );
 }

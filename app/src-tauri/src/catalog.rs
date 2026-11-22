@@ -51,6 +51,99 @@ pub struct AppRecord {
     pub source: &'static str,
     /// Extra names to match data folders by (exe stem, aliases, …).
     pub aliases: Vec<String>,
+    /// Where the app's icon can be found, best first. Only recorded here;
+    /// `icons` reads them lazily when the UI shows the app.
+    pub icons: Vec<IconHint>,
+}
+
+/// A place an app's or game's icon may be found. Nothing is read while the
+/// catalog loads: `icons` turns hints into image bytes on demand.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IconHint {
+    /// An icon resource (`.exe`, `.dll`, `.ico` with an index, as in the
+    /// Windows `DisplayIcon` value) or an image file (`.png`, `.jpg`, `.icns`).
+    File { path: PathBuf, index: i32 },
+    /// The app's main executable somewhere inside this folder.
+    ExeIn { dir: PathBuf },
+    /// An MSIX/Appx package folder: the logo named in its AppxManifest.xml.
+    Package { root: PathBuf },
+    /// Steam's local library art (`appcache/librarycache`) for an app id.
+    Steam { cache: PathBuf, appid: String },
+    /// A macOS `.app` bundle.
+    Bundle { app: PathBuf },
+}
+
+impl IconHint {
+    /// Lower is better. Explicit icons beat launcher art, which beats
+    /// guessing the main executable; uninstallers' icons come last.
+    pub fn rank(&self) -> u8 {
+        match self {
+            IconHint::File { path, .. } => {
+                // Both separators: registry paths are ranked the same everywhere.
+                let p = path.to_string_lossy().to_lowercase();
+                let file = p.rsplit(['/', '\\']).next().unwrap_or_default();
+                if file.starts_with("unins") {
+                    4
+                } else {
+                    0
+                }
+            }
+            IconHint::Package { .. } | IconHint::Bundle { .. } => 0,
+            IconHint::Steam { .. } => 1,
+            IconHint::ExeIn { .. } => 2,
+        }
+    }
+}
+
+/// Order hints best first and drop duplicates.
+pub fn tidy_icons(icons: &mut Vec<IconHint>) {
+    let mut seen = std::collections::HashSet::new();
+    icons.retain(|h| seen.insert(h.clone()));
+    icons.sort_by_key(IconHint::rank);
+}
+
+/// Parse a Windows `DisplayIcon`-style value: `"C:\x\app.exe",0`,
+/// `C:\x\app.ico`, `C:/x/icon.ico, -101`. Generic system hosts
+/// (msiexec, rundll32, explorer) and folders are ignored.
+pub fn icon_spec(s: &str) -> Option<IconHint> {
+    let s = s.trim();
+    let (path, rest) = if let Some(r) = s.strip_prefix('"') {
+        let end = r.find('"')?;
+        (&r[..end], r[end + 1..].trim())
+    } else {
+        match s.rfind(',') {
+            Some(i) if s[i + 1..].trim().parse::<i32>().is_ok() => (&s[..i], &s[i..]),
+            _ => (s, ""),
+        }
+    };
+    let index = rest
+        .trim_start_matches(',')
+        .trim()
+        .parse::<i32>()
+        .unwrap_or(0);
+    let path_str = path.trim();
+    let drive = path_str.as_bytes().get(1) == Some(&b':');
+    if !(drive || path_str.starts_with(['/', '\\'])) {
+        return None;
+    }
+    let path = PathBuf::from(path_str);
+    // Split on both separators so registry-style paths parse the same everywhere.
+    let file = path_str.rsplit(['/', '\\']).next()?.to_lowercase();
+    if file.is_empty() {
+        return None;
+    }
+    if matches!(
+        file.as_str(),
+        "msiexec.exe" | "rundll32.exe" | "explorer.exe" | "cmd.exe" | "powershell.exe"
+    ) {
+        return None;
+    }
+    let ext = file.rsplit_once('.').map(|(_, e)| e).unwrap_or_default();
+    matches!(
+        ext,
+        "exe" | "dll" | "ico" | "icl" | "png" | "jpg" | "jpeg" | "icns"
+    )
+    .then_some(IconHint::File { path, index })
 }
 
 impl AppRecord {
@@ -66,6 +159,7 @@ impl AppRecord {
             uninstall: None,
             source,
             aliases: Vec::new(),
+            icons: Vec::new(),
         }
     }
 }
@@ -299,6 +393,13 @@ pub fn steam_games(steam_root: &Path) -> Vec<AppRecord> {
                 url: format!("steam://uninstall/{appid}"),
                 label: "Steam's uninstall prompt".into(),
             });
+            r.icons.push(IconHint::Steam {
+                cache: steam_root.join("appcache").join("librarycache"),
+                appid: appid.clone(),
+            });
+            r.icons.push(IconHint::ExeIn {
+                dir: steamapps.join("common").join(&dir),
+            });
             out.push(r);
         }
     }
@@ -331,6 +432,16 @@ pub fn epic_installs(program_data: &Path) -> Vec<AppRecord> {
             }
             let mut r = AppRecord::new(name, AppKind::Game, "Epic Games");
             r.install_dirs.push(PathBuf::from(loc));
+            let exe = v["LaunchExecutable"].as_str().unwrap_or_default();
+            if !exe.is_empty() && !exe.contains("..") {
+                r.icons.push(IconHint::File {
+                    path: Path::new(loc).join(exe),
+                    index: 0,
+                });
+            }
+            r.icons.push(IconHint::ExeIn {
+                dir: PathBuf::from(loc),
+            });
             r.uninstall = Some(Uninstall::Launcher {
                 name: "Epic Games Launcher".into(),
                 url: Some("com.epicgames.launcher://store/library".into()),
@@ -357,6 +468,10 @@ pub fn epic_installs(program_data: &Path) -> Vec<AppRecord> {
                 let mut r = AppRecord::new(name, AppKind::App, "Epic Games");
                 r.publisher = Some("Epic Games".into());
                 r.install_dirs.push(PathBuf::from(loc));
+                r.icons.push(IconHint::File {
+                    path: Path::new(loc).join("Engine/Binaries/Win64/UnrealEditor.exe"),
+                    index: 0,
+                });
                 r.uninstall = Some(Uninstall::Launcher {
                     name: "Epic Games Launcher".into(),
                     url: Some("com.epicgames.launcher://unreal".into()),
@@ -383,8 +498,10 @@ pub fn merge(records: Vec<AppRecord>) -> Vec<AppRecord> {
                 if r_is_launcher && existing.source == "Windows" {
                     let keep_uninstall = existing.uninstall.clone();
                     let aliases = std::mem::take(&mut existing.aliases);
+                    let icons = std::mem::take(&mut existing.icons);
                     *existing = r;
                     existing.aliases.extend(aliases);
+                    existing.icons.extend(icons);
                     if let Some(Uninstall::Command { .. }) = keep_uninstall {
                         existing.uninstall = keep_uninstall;
                     }
@@ -392,6 +509,7 @@ pub fn merge(records: Vec<AppRecord>) -> Vec<AppRecord> {
                     existing.data_dirs.extend(r.data_dirs);
                     existing.cache_dirs.extend(r.cache_dirs);
                     existing.aliases.extend(r.aliases);
+                    existing.icons.extend(r.icons);
                     if existing.uninstall.is_none() {
                         existing.uninstall = r.uninstall;
                     }
@@ -401,6 +519,9 @@ pub fn merge(records: Vec<AppRecord>) -> Vec<AppRecord> {
             by_dir.insert(k.clone(), out.len());
         }
         out.push(r);
+    }
+    for r in &mut out {
+        tidy_icons(&mut r.icons);
     }
     out
 }
@@ -625,7 +746,8 @@ mod win {
                 let mut install: Option<PathBuf> = e
                     .string("InstallLocation")
                     .map(|s| PathBuf::from(s.trim_matches('"')));
-                let icon_exe = e.string("DisplayIcon").and_then(|s| exe_from(&s));
+                let display_icon = e.string("DisplayIcon");
+                let icon_exe = display_icon.as_deref().and_then(exe_from);
                 if !install.as_deref().map(usable_dir).unwrap_or(false) {
                     install = icon_exe
                         .as_ref()
@@ -664,7 +786,11 @@ mod win {
                 );
                 r.publisher = publisher;
                 r.version = e.string("DisplayVersion");
+                if let Some(h) = display_icon.as_deref().and_then(icon_spec) {
+                    r.icons.push(h);
+                }
                 if let Some(d) = install {
+                    r.icons.push(IconHint::ExeIn { dir: d.clone() });
                     r.install_dirs.push(d);
                 }
                 if let Some(exe) = &icon_exe {
@@ -779,6 +905,14 @@ mod win {
                 .unwrap_or_else(|| pretty_package(pkg));
             if let Some(&i) = by_family.get(&family) {
                 if let Some(r) = root {
+                    // Resource ("split") packages hold no app logo: the
+                    // main package's logo goes first.
+                    let hint = IconHint::Package { root: r.clone() };
+                    if parts[3].is_empty() {
+                        out[i].icons.insert(0, hint);
+                    } else {
+                        out[i].icons.push(hint);
+                    }
                     out[i].install_dirs.push(r);
                 }
                 continue;
@@ -796,6 +930,7 @@ mod win {
             };
             let mut r = AppRecord::new(display, kind, "Microsoft Store");
             if let Some(root) = root {
+                r.icons.push(IconHint::Package { root: root.clone() });
                 r.install_dirs.push(root);
             }
             if let Some(l) = &local {
@@ -817,6 +952,12 @@ mod win {
                     continue;
                 };
                 let mut r = AppRecord::new(name, AppKind::Game, "GOG");
+                if let Some(h) = e.string("exe").as_deref().and_then(icon_spec) {
+                    r.icons.push(h);
+                }
+                r.icons.push(IconHint::ExeIn {
+                    dir: PathBuf::from(&path),
+                });
                 r.install_dirs.push(PathBuf::from(path));
                 r.uninstall = Some(Uninstall::Launcher {
                     name: "GOG Galaxy".into(),
@@ -844,6 +985,7 @@ mod win {
                     continue;
                 }
                 let mut r = AppRecord::new(name, AppKind::Game, "Ubisoft Connect");
+                r.icons.push(IconHint::ExeIn { dir: p.clone() });
                 r.install_dirs.push(p);
                 r.uninstall = Some(Uninstall::Launcher {
                     name: "Ubisoft Connect".into(),
@@ -898,6 +1040,7 @@ mod mac {
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let mut r = AppRecord::new(name, AppKind::App, "Applications");
+                r.icons.push(IconHint::Bundle { app: p.clone() });
                 r.install_dirs.push(p.clone());
                 r.uninstall = Some(Uninstall::Reveal {
                     path: p.to_string_lossy().into_owned(),
@@ -985,6 +1128,75 @@ mod tests {
         assert!(
             matches!(&games[0].uninstall, Some(Uninstall::Url { url, .. }) if url == "steam://uninstall/570")
         );
+    }
+
+    #[test]
+    fn parses_display_icon_values() {
+        let f = |s: &str| match icon_spec(s) {
+            Some(IconHint::File { path, index }) => Some((path, index)),
+            _ => None,
+        };
+        assert_eq!(
+            f(r#""C:\Program Files\App\app.exe",0"#),
+            Some((PathBuf::from(r"C:\Program Files\App\app.exe"), 0))
+        );
+        assert_eq!(
+            f(r"C:\x\OneDriveSetup.exe,-101"),
+            Some((PathBuf::from(r"C:\x\OneDriveSetup.exe"), -101))
+        );
+        assert_eq!(
+            f(r"C:\Rockstar\Launcher.exe, 0"),
+            Some((PathBuf::from(r"C:\Rockstar\Launcher.exe"), 0))
+        );
+        assert_eq!(
+            f("C:/Riot Games/Riot Client/Resources/icon.ico"),
+            Some((
+                PathBuf::from("C:/Riot Games/Riot Client/Resources/icon.ico"),
+                0
+            ))
+        );
+        assert_eq!(f(r"C:\Windows\System32\msiexec.exe,1"), None);
+        assert_eq!(f(r"C:\Program Files\qpdf 12.3.2\"), None);
+        assert_eq!(f("app.exe"), None);
+        assert_eq!(f(""), None);
+    }
+
+    #[test]
+    fn merged_records_keep_the_best_icon_first() {
+        let dir = PathBuf::from(r"D:\Steam\steamapps\common\Game");
+        let mut steam = AppRecord::new("Game", AppKind::Game, "Steam");
+        steam.install_dirs.push(dir.clone());
+        steam.icons.push(IconHint::Steam {
+            cache: PathBuf::from(r"D:\Steam\appcache\librarycache"),
+            appid: "1".into(),
+        });
+        steam.icons.push(IconHint::ExeIn { dir: dir.clone() });
+        let mut reg = AppRecord::new("Game", AppKind::Game, "Windows");
+        reg.install_dirs.push(dir.clone());
+        let ico = IconHint::File {
+            path: PathBuf::from(r"D:\Steam\steam\games\abc.ico"),
+            index: 0,
+        };
+        reg.icons.push(ico.clone());
+        reg.icons.push(IconHint::ExeIn { dir: dir.clone() });
+        let m = merge(vec![reg, steam]);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].icons.len(), 3, "duplicates dropped");
+        assert_eq!(m[0].icons[0], ico);
+        assert!(matches!(m[0].icons[1], IconHint::Steam { .. }));
+        assert!(matches!(m[0].icons[2], IconHint::ExeIn { .. }));
+        // An uninstaller's icon is only a last resort.
+        let mut v = vec![
+            IconHint::File {
+                path: PathBuf::from(r"C:\A\unins000.exe"),
+                index: 0,
+            },
+            IconHint::ExeIn {
+                dir: PathBuf::from(r"C:\A"),
+            },
+        ];
+        tidy_icons(&mut v);
+        assert!(matches!(v[0], IconHint::ExeIn { .. }));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 pub mod catalog;
 pub mod delete;
 pub mod dupes;
+pub mod icons;
 pub mod safety;
 pub mod scan;
 pub mod storage;
@@ -949,9 +950,15 @@ struct EntitySummary {
     can_clean_build: bool,
     locations: usize,
     mtime: i64,
+    /// Key for `get_icons` when Roomy knows where this app's icon lives.
+    icon: Option<String>,
 }
 
-fn entity_summary(e: &storage::Entity) -> EntitySummary {
+fn entity_summary(e: &storage::Entity, icons: &icons::IconStore) -> EntitySummary {
+    let icon = icons::key(&e.icons);
+    if let Some(k) = &icon {
+        icons.register(k, &e.icons);
+    }
     EntitySummary {
         id: e.id,
         category: e.category,
@@ -969,6 +976,7 @@ fn entity_summary(e: &storage::Entity) -> EntitySummary {
         can_clean_build: !e.junk_dirs.is_empty() && e.buckets[storage::B_BUILD as usize] > 0,
         locations: e.locations.len(),
         mtime: e.mtime,
+        icon,
     }
 }
 
@@ -1006,6 +1014,7 @@ fn storage_for(d: &mut ScanData) -> Arc<storage::Storage> {
 async fn get_storage(app: AppHandle) -> Result<StorageView, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
+        let icons = app.state::<icons::IconStore>();
         let mut g = state.data.write();
         let d = g.as_mut().ok_or("No scan yet.")?;
         let s = storage_for(d);
@@ -1013,7 +1022,7 @@ async fn get_storage(app: AppHandle) -> Result<StorageView, String> {
             .entities
             .iter()
             .filter(|e| e.size > 0)
-            .map(entity_summary)
+            .map(|e| entity_summary(e, &icons))
             .collect();
         entities.sort_by_key(|e| std::cmp::Reverse(e.size));
         Ok(StorageView {
@@ -1051,8 +1060,24 @@ struct EntityDetails {
     uninstall: Option<catalog::Uninstall>,
 }
 
+/// Icons for entity rows, as data URLs (None: show the letter tile).
+/// Resolved off the UI thread on a small low-priority pool and cached.
 #[tauri::command]
-fn get_entity(state: St, id: u32) -> Result<EntityDetails, String> {
+async fn get_icons(
+    app: AppHandle,
+    keys: Vec<String>,
+) -> Result<HashMap<String, Option<String>>, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<icons::IconStore>().get_many(&keys))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_entity(
+    state: St,
+    icons: State<'_, icons::IconStore>,
+    id: u32,
+) -> Result<EntityDetails, String> {
     let mut g = state.data.write();
     let d = g.as_mut().ok_or("No scan yet.")?;
     let s = storage_for(d);
@@ -1066,7 +1091,7 @@ fn get_entity(state: St, id: u32) -> Result<EntityDetails, String> {
         (!tree.is_pseudo(n)).then(|| tree.path(n).to_string_lossy().into_owned())
     };
     Ok(EntityDetails {
-        entity: entity_summary(e),
+        entity: entity_summary(e, &icons),
         locations: e
             .locations
             .iter()
@@ -1247,7 +1272,19 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state)
+        .setup(|app| {
+            // Extracted app icons are cached in Roomy's own data folder.
+            let dir = app
+                .path()
+                .app_local_data_dir()
+                .ok()
+                .map(|d| d.join("icons"));
+            app.manage(icons::IconStore::new(dir));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             list_volumes,
@@ -1269,6 +1306,7 @@ pub fn run() {
             cancel_duplicates,
             get_storage,
             get_entity,
+            get_icons,
             entity_action,
         ])
         .run(tauri::generate_context!())
