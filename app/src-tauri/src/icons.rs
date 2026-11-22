@@ -22,6 +22,12 @@ use std::sync::Arc;
 pub const ICON_PX: u32 = 64;
 /// Images larger than this are not icons; skip them.
 const MAX_IMAGE_BYTES: u64 = 512 * 1024;
+/// Largest decoded width/height accepted for any image sent to the UI.
+pub const MAX_IMAGE_PX: u32 = 1024;
+/// Manifests and plists are small; anything bigger is ignored.
+const MAX_TEXT_BYTES: u64 = 1024 * 1024;
+/// `.icns` files hold many sizes; cap what is read.
+const MAX_ICNS_BYTES: u64 = 16 * 1024 * 1024;
 /// Bump to invalidate every cached extraction.
 const CACHE_VERSION: &str = "1";
 /// The on-disk cache is cleared when it grows past this many files.
@@ -48,7 +54,13 @@ pub enum Source {
     Image { path: PathBuf, mime: &'static str },
     /// An icon resource that has to be extracted (`.exe`, `.dll`, `.ico`, `.icns`).
     Resource { path: PathBuf, index: i32 },
+    /// A macOS `.app` bundle's own icon as the system draws it
+    /// (`NSWorkspace iconForFile:`, which covers `Assets.car` icons).
+    AppBundle { app: PathBuf },
 }
+
+/// Cache index used for system-drawn bundle icons.
+const BUNDLE_INDEX: i32 = i32::MIN;
 
 /// Stable short key for a list of hints (the UI caches icons by it).
 pub fn key(hints: &[IconHint]) -> Option<String> {
@@ -68,12 +80,52 @@ fn ext_lower(p: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn read_small(p: &Path, max: u64) -> Option<Vec<u8>> {
-    let md = std::fs::metadata(p).ok()?;
+/// True for a symlink, junction or other reparse point (never followed).
+fn is_link(md: &std::fs::Metadata) -> bool {
+    if md.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// A regular file that isn't a link.
+fn is_plain_file(p: &Path) -> bool {
+    std::fs::symlink_metadata(p)
+        .map(|m| m.is_file() && !is_link(&m))
+        .unwrap_or(false)
+}
+
+/// A real directory that isn't a link or junction.
+fn is_plain_dir(p: &Path) -> bool {
+    std::fs::symlink_metadata(p)
+        .map(|m| m.is_dir() && !is_link(&m))
+        .unwrap_or(false)
+}
+
+/// Read at most `max` bytes of a regular, non-link file. The size is checked
+/// on the open handle and the read itself is capped, so a file that grows in
+/// between can't exceed the bound.
+fn read_bounded(p: &Path, max: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !is_plain_file(p) {
+        return None;
+    }
+    let f = std::fs::File::open(p).ok()?;
+    let md = f.metadata().ok()?;
     if !md.is_file() || md.len() == 0 || md.len() > max {
         return None;
     }
-    std::fs::read(p).ok()
+    let mut buf = Vec::with_capacity(md.len() as usize);
+    f.take(max + 1).read_to_end(&mut buf).ok()?;
+    (!buf.is_empty() && buf.len() as u64 <= max).then_some(buf)
 }
 
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
@@ -86,12 +138,120 @@ fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Decoded width and height from a PNG header or a JPEG frame header.
+pub fn image_size(b: &[u8]) -> Option<(u32, u32)> {
+    let be16 =
+        |i: usize| -> Option<u32> { Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]) as u32) };
+    let be32 =
+        |i: usize| -> Option<u32> { Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?)) };
+    match image_mime(b)? {
+        "image/png" => {
+            if b.get(12..16)? != b"IHDR" {
+                return None;
+            }
+            Some((be32(16)?, be32(20)?))
+        }
+        _ => {
+            // Walk JPEG segments to the first start-of-frame marker.
+            let mut i = 2;
+            for _ in 0..512 {
+                if *b.get(i)? != 0xFF {
+                    return None;
+                }
+                let m = *b.get(i + 1)?;
+                if m == 0xFF {
+                    i += 1;
+                    continue;
+                }
+                if matches!(m, 0xD8 | 0x01 | 0xD0..=0xD7) {
+                    i += 2;
+                    continue;
+                }
+                if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+                    return Some((be16(i + 7)?, be16(i + 5)?));
+                }
+                i += 2 + be16(i + 2)? as usize;
+            }
+            None
+        }
+    }
+}
+
+/// The image's MIME type when it's a PNG/JPEG of plausible icon dimensions.
+pub fn checked_image(bytes: &[u8]) -> Option<&'static str> {
+    let mime = image_mime(bytes)?;
+    let (w, h) = image_size(bytes)?;
+    ((1..=MAX_IMAGE_PX).contains(&w) && (1..=MAX_IMAGE_PX).contains(&h)).then_some(mime)
+}
+
+/// Only plain local absolute paths are looked at: `X:\...` on Windows and
+/// `/...` elsewhere. UNC, device and verbatim paths, drive-relative or
+/// rooted-only paths and `..` are refused, so showing a row never reaches
+/// out to the network or a device.
+pub fn is_local_path(p: &Path) -> bool {
+    use std::path::Component;
+    let mut comps = p.components();
+    #[cfg(windows)]
+    {
+        match comps.next() {
+            Some(Component::Prefix(pre)) if matches!(pre.kind(), std::path::Prefix::Disk(_)) => {}
+            _ => return false,
+        }
+        if !matches!(comps.next(), Some(Component::RootDir)) {
+            return false;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if p.to_string_lossy().starts_with("//")
+            || !matches!(comps.next(), Some(Component::RootDir))
+        {
+            return false;
+        }
+    }
+    comps.all(|c| matches!(c, Component::Normal(_)))
+}
+
+/// A relative path made only of plain names (no root, drive, `.` or `..`),
+/// as found in manifests. Either separator is accepted.
+pub fn plain_relative(s: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let s = s.trim().replace('\\', "/");
+    if s.is_empty() || s.contains(':') || s.starts_with('/') {
+        return None;
+    }
+    let p = PathBuf::from(s);
+    p.components()
+        .all(|c| matches!(c, Component::Normal(_)))
+        .then_some(p)
+}
+
+/// Every path a hint points at is a plain local path.
+fn hint_is_local(hint: &IconHint) -> bool {
+    match hint {
+        IconHint::File { path, .. } => is_local_path(path),
+        IconHint::ExeIn { dir } | IconHint::IcoIn { dir } => is_local_path(dir),
+        IconHint::Package { root } => is_local_path(root),
+        IconHint::Steam { cache, appid } => {
+            is_local_path(cache) && !appid.is_empty() && appid.chars().all(|c| c.is_ascii_digit())
+        }
+        IconHint::Bundle { app } => is_local_path(app),
+    }
+}
+
 /// Concrete files a hint points at, best first. Cheap: a few stats, one
 /// manifest read or a shallow folder listing.
 pub fn resolve(hint: &IconHint) -> Vec<Source> {
+    if !hint_is_local(hint) {
+        return Vec::new();
+    }
     match hint {
         IconHint::File { path, index } => file_source(path, *index).into_iter().collect(),
         IconHint::ExeIn { dir } => main_exes(dir)
+            .into_iter()
+            .map(|path| Source::Resource { path, index: 0 })
+            .collect(),
+        IconHint::IcoIn { dir } => launcher_icos(dir)
             .into_iter()
             .map(|path| Source::Resource { path, index: 0 })
             .collect(),
@@ -103,15 +263,12 @@ pub fn resolve(hint: &IconHint) -> Vec<Source> {
             .into_iter()
             .collect(),
         IconHint::Steam { cache, appid } => steam_icon(cache, appid).into_iter().collect(),
-        IconHint::Bundle { app } => bundle_icns(app)
-            .map(|path| Source::Resource { path, index: 0 })
-            .into_iter()
-            .collect(),
+        IconHint::Bundle { app } => bundle_sources(app),
     }
 }
 
 fn file_source(path: &Path, index: i32) -> Option<Source> {
-    if !path.is_file() {
+    if !is_plain_file(path) {
         return None;
     }
     let path = path.to_path_buf();
@@ -229,6 +386,9 @@ fn exe_candidates(dir: &Path) -> Vec<(PathBuf, ExeCandidate)> {
     const MAX_DIRS: usize = 48;
     const MAX_ENTRIES: usize = 400;
     let mut out = Vec::new();
+    if !is_plain_dir(dir) {
+        return out;
+    }
     let mut queue = std::collections::VecDeque::from([(dir.to_path_buf(), 0u8)]);
     let mut visited = 0;
     while let Some((d, depth)) = queue.pop_front() {
@@ -277,6 +437,35 @@ fn main_exes(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+// --- Launcher icon files ------------------------------------------------------
+
+/// Icon files a launcher leaves at the top of an install folder, best first:
+/// GOG's `goggame-<id>.ico`, then any other `.ico` (Epic games and the
+/// `.egstore` folder), never an uninstaller's.
+pub fn launcher_icos(dir: &Path) -> Vec<PathBuf> {
+    if !is_plain_dir(dir) {
+        return Vec::new();
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(u8, String, PathBuf)> = rd
+        .flatten()
+        .take(400)
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if !name.ends_with(".ico") || name.starts_with("unins") {
+                return None;
+            }
+            let rank = if name.starts_with("goggame-") { 0 } else { 1 };
+            Some((rank, name, e.path()))
+        })
+        .collect();
+    found.sort();
+    found.into_iter().take(3).map(|(_, _, p)| p).collect()
+}
+
 // --- MSIX / Appx package logos ---------------------------------------------
 
 fn xml_attr(text: &str, name: &str) -> Option<String> {
@@ -312,27 +501,10 @@ pub fn pick_logo_variant(stem: &str, ext: &str, names: &[String]) -> Option<Stri
         let score = if quals.is_empty() {
             40
         } else if let Some(q) = quals.strip_prefix('.') {
-            if q.contains("contrast-") {
-                continue;
+            match variant_score(q) {
+                Some(s) => s,
+                None => continue,
             }
-            let mut score = 0i64;
-            for part in q.split('_') {
-                if let Some(n) = part.strip_prefix("targetsize-") {
-                    let n: i64 = n.parse().unwrap_or(0);
-                    score += 300 - (n - ICON_PX as i64).abs();
-                    if n < 48 {
-                        score -= 150;
-                    }
-                } else if let Some(s) = part.strip_prefix("scale-") {
-                    let s: i64 = s.parse().unwrap_or(100);
-                    score += 100 - (s - 200).abs() / 10;
-                } else if part == "altform-unplated" {
-                    score += 60;
-                } else if part == "altform-lightunplated" {
-                    score += 50;
-                }
-            }
-            score
         } else {
             continue;
         };
@@ -343,16 +515,40 @@ pub fn pick_logo_variant(stem: &str, ext: &str, names: &[String]) -> Option<Stri
     best.map(|(_, n)| n.clone())
 }
 
-fn package_logo(root: &Path) -> Option<PathBuf> {
-    let bytes = read_small(&root.join("AppxManifest.xml"), 1024 * 1024)?;
-    let text = String::from_utf8_lossy(&bytes);
-    let rel = xml_attr(&text, "Square44x44Logo").or_else(|| xml_elem(&text, "Logo"))?;
-    let rel = rel.replace('\\', "/");
-    if rel.is_empty() || rel.contains("..") || rel.starts_with('/') || rel.contains(':') {
+/// Score of an MSIX qualifier list (`targetsize-48_altform-unplated`), or
+/// None for variants never used: high contrast, or sizes that aren't
+/// plausible (malformed names can't overflow anything).
+fn variant_score(q: &str) -> Option<i64> {
+    if q.contains("contrast-") {
         return None;
     }
-    let full = root.join(&rel);
+    let mut score = 0i64;
+    for part in q.split('_') {
+        if let Some(n) = part.strip_prefix("targetsize-") {
+            let n = n.parse::<u16>().ok().filter(|n| (1..=1024).contains(n))? as i64;
+            score += 300 - (n - ICON_PX as i64).abs();
+            if n < 48 {
+                score -= 150;
+            }
+        } else if let Some(s) = part.strip_prefix("scale-") {
+            let s = s.parse::<u16>().ok().filter(|s| (25..=800).contains(s))? as i64;
+            score += 100 - (s - 200).abs() / 10;
+        } else if part == "altform-unplated" {
+            score += 60;
+        } else if part == "altform-lightunplated" {
+            score += 50;
+        }
+    }
+    Some(score)
+}
+
+/// The best variant of a logo named relative to a package folder.
+fn logo_file(root: &Path, rel: &str) -> Option<PathBuf> {
+    let full = root.join(plain_relative(rel)?);
     let dir = full.parent()?;
+    if !is_plain_dir(dir) {
+        return None;
+    }
     let stem = full.file_stem()?.to_string_lossy().into_owned();
     let ext = ext_lower(&full);
     let names: Vec<String> = std::fs::read_dir(dir)
@@ -361,7 +557,38 @@ fn package_logo(root: &Path) -> Option<PathBuf> {
         .take(2000)
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    pick_logo_variant(&stem, &ext, &names).map(|n| dir.join(n))
+    pick_logo_variant(&stem, &ext, &names)
+        .map(|n| dir.join(n))
+        .filter(|p| is_plain_file(p))
+}
+
+/// The attributes of the first `<tag ...>` element.
+fn xml_tag<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let i = text.find(&format!("<{tag}"))?;
+    let end = text[i..].find('>')?;
+    Some(&text[i..i + end])
+}
+
+/// MSIX packages (AppxManifest.xml) and Xbox/GDK games
+/// (MicrosoftGame.config, `<ShellVisuals Square44x44Logo=...>`).
+fn package_logo(root: &Path) -> Option<PathBuf> {
+    if !is_plain_dir(root) {
+        return None;
+    }
+    if let Some(bytes) = read_bounded(&root.join("AppxManifest.xml"), MAX_TEXT_BYTES) {
+        let text = String::from_utf8_lossy(&bytes);
+        let rel = xml_attr(&text, "Square44x44Logo").or_else(|| xml_elem(&text, "Logo"));
+        if let Some(p) = rel.and_then(|r| logo_file(root, &r)) {
+            return Some(p);
+        }
+    }
+    let bytes = read_bounded(&root.join("MicrosoftGame.config"), MAX_TEXT_BYTES)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let visuals = xml_tag(&text, "ShellVisuals")?;
+    ["Square44x44Logo", "Square150x150Logo", "StoreLogo"]
+        .iter()
+        .filter_map(|a| xml_attr(visuals, a))
+        .find_map(|r| logo_file(root, &r))
 }
 
 // --- Steam library art -------------------------------------------------------
@@ -376,12 +603,13 @@ fn is_sha1_jpg(name: &str) -> bool {
 /// Steam keeps each game's small icon in `librarycache/<appid>/<sha1>.jpg`
 /// (older clients: `librarycache/<appid>_icon.jpg`).
 fn steam_icon(cache: &Path, appid: &str) -> Option<Source> {
-    if appid.is_empty() || !appid.chars().all(|c| c.is_ascii_digit()) {
+    if appid.is_empty() || !appid.chars().all(|c| c.is_ascii_digit()) || !is_plain_dir(cache) {
         return None;
     }
     if let Ok(rd) = std::fs::read_dir(cache.join(appid)) {
         let mut icons: Vec<PathBuf> = rd
             .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
             .filter(|e| is_sha1_jpg(&e.file_name().to_string_lossy()))
             .map(|e| e.path())
             .collect();
@@ -394,7 +622,7 @@ fn steam_icon(cache: &Path, appid: &str) -> Option<Source> {
         }
     }
     let old = cache.join(format!("{appid}_icon.jpg"));
-    old.is_file().then_some(Source::Image {
+    is_plain_file(&old).then_some(Source::Image {
         path: old,
         mime: "image/jpeg",
     })
@@ -403,41 +631,58 @@ fn steam_icon(cache: &Path, appid: &str) -> Option<Source> {
 // --- macOS bundles -----------------------------------------------------------
 
 fn bundle_icns(app: &Path) -> Option<PathBuf> {
+    if !is_plain_dir(app) {
+        return None;
+    }
     let res = app.join("Contents").join("Resources");
     #[cfg(target_os = "macos")]
     {
-        let named = plist::Value::from_file(app.join("Contents").join("Info.plist"))
-            .ok()
+        let named = read_bounded(&app.join("Contents").join("Info.plist"), MAX_TEXT_BYTES)
+            .and_then(|b| plist::Value::from_reader(std::io::Cursor::new(b)).ok())
             .and_then(|v| {
                 v.as_dictionary()?
                     .get("CFBundleIconFile")?
                     .as_string()
                     .map(str::to_string)
             });
-        if let Some(n) = named.filter(|n| !n.is_empty() && !n.contains('/')) {
+        // A single plain file name inside Resources.
+        let named = named
+            .and_then(|n| plain_relative(&n))
+            .filter(|p| p.components().count() == 1);
+        if let Some(n) = named {
             let p = res.join(&n);
             let p = if p.extension().is_none() {
                 p.with_extension("icns")
             } else {
                 p
             };
-            if p.is_file() {
+            if is_plain_file(&p) {
                 return Some(p);
             }
         }
     }
+    // Never an arbitrary .icns: bundles also carry document-type icons.
     let app_icon = res.join("AppIcon.icns");
-    if app_icon.is_file() {
-        return Some(app_icon);
+    is_plain_file(&app_icon).then_some(app_icon)
+}
+
+/// A bundle's icon: on macOS the system's own rendering first (it also
+/// knows `CFBundleIconName` icons from `Assets.car`), then the `.icns` the
+/// bundle names (`CFBundleIconFile`) or `AppIcon.icns`.
+fn bundle_sources(app: &Path) -> Vec<Source> {
+    if !is_plain_dir(app) {
+        return Vec::new();
     }
-    let mut all: Vec<PathBuf> = std::fs::read_dir(&res)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| ext_lower(p) == "icns")
-        .collect();
-    all.sort();
-    all.into_iter().next()
+    let mut out = Vec::new();
+    if cfg!(target_os = "macos") {
+        out.push(Source::AppBundle {
+            app: app.to_path_buf(),
+        });
+    }
+    if let Some(path) = bundle_icns(app) {
+        out.push(Source::Resource { path, index: 0 });
+    }
+    out
 }
 
 /// The PNG inside an `.icns` file closest to (and not below) `want` pixels.
@@ -464,7 +709,7 @@ pub fn icns_best_png(data: &[u8], want: u32) -> Option<Vec<u8>> {
             b"ic10" => 1024,
             _ => 0,
         };
-        if px > 0 && image_mime(body) == Some("image/png") {
+        if px > 0 && checked_image(body) == Some("image/png") {
             let better = match best {
                 None => true,
                 Some((b, _)) => {
@@ -484,8 +729,11 @@ pub fn icns_best_png(data: &[u8], want: u32) -> Option<Vec<u8>> {
 // --- Extraction --------------------------------------------------------------
 
 fn extract(path: &Path, index: i32) -> Option<Icon> {
+    if !is_plain_file(path) {
+        return None;
+    }
     if ext_lower(path) == "icns" {
-        let data = read_small(path, 16 * 1024 * 1024)?;
+        let data = read_bounded(path, MAX_ICNS_BYTES)?;
         if let Some(png) =
             icns_best_png(&data, ICON_PX).filter(|p| p.len() as u64 <= MAX_IMAGE_BYTES)
         {
@@ -494,15 +742,19 @@ fn extract(path: &Path, index: i32) -> Option<Icon> {
                 bytes: png,
             });
         }
-        return platform::convert_icns(path).map(|bytes| Icon {
+        return platform::convert_icns(path)
+            .filter(|b| checked_image(b) == Some("image/png"))
+            .map(|bytes| Icon {
+                mime: "image/png",
+                bytes,
+            });
+    }
+    platform::extract_resource(path, index, ICON_PX)
+        .filter(|b| checked_image(b) == Some("image/png"))
+        .map(|bytes| Icon {
             mime: "image/png",
             bytes,
-        });
-    }
-    platform::extract_resource(path, index, ICON_PX).map(|bytes| Icon {
-        mime: "image/png",
-        bytes,
-    })
+        })
 }
 
 #[cfg(windows)]
@@ -518,6 +770,10 @@ mod platform {
     use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
     pub fn convert_icns(_path: &Path) -> Option<Vec<u8>> {
+        None
+    }
+
+    pub fn bundle_icon(_app: &Path) -> Option<Vec<u8>> {
         None
     }
 
@@ -644,31 +900,88 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
     pub fn extract_resource(_path: &Path, _index: i32, _px: u32) -> Option<Vec<u8>> {
         None
     }
 
+    /// Run a system tool with no input or output, killed after `limit`.
+    fn run_with_timeout(mut cmd: Command, limit: Duration) -> bool {
+        let Ok(mut child) = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) if start.elapsed() < limit => {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+            }
+        }
+    }
+
+    /// Run `cmd`, which writes a PNG to a fresh temporary file, and read it back.
+    fn png_from(make: impl FnOnce(&Path) -> Command) -> Option<Vec<u8>> {
+        let out = std::env::temp_dir().join(format!("roomy-icon-{}.png", super::unique_suffix()));
+        let ok = run_with_timeout(make(&out), Duration::from_secs(10));
+        let bytes = ok
+            .then(|| super::read_bounded(&out, super::MAX_IMAGE_BYTES))
+            .flatten();
+        let _ = std::fs::remove_file(&out);
+        bytes.filter(|b| super::checked_image(b) == Some("image/png"))
+    }
+
     /// Older `.icns` files without PNG entries: let `sips` convert them.
     pub fn convert_icns(path: &Path) -> Option<Vec<u8>> {
-        let out = std::env::temp_dir().join(format!(
-            "roomy-icon-{}-{:?}.png",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let ok = std::process::Command::new("/usr/bin/sips")
-            .args(["-s", "format", "png", "-Z", &super::ICON_PX.to_string()])
-            .arg(path)
-            .arg("--out")
-            .arg(&out)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        let bytes = ok.then(|| std::fs::read(&out).ok()).flatten();
-        let _ = std::fs::remove_file(&out);
-        bytes.filter(|b| super::image_mime(b) == Some("image/png"))
+        png_from(|out| {
+            let mut c = Command::new("/usr/bin/sips");
+            c.args(["-s", "format", "png", "-Z", &super::ICON_PX.to_string()])
+                .arg(path)
+                .arg("--out")
+                .arg(out);
+            c
+        })
+    }
+
+    /// The bundle's icon as Finder shows it: `NSWorkspace iconForFile:`
+    /// (documented thread-safe) drawn at the icon size and saved as PNG.
+    /// Runs in a separate `osascript` process; paths are passed as
+    /// arguments, never spliced into the script.
+    const DRAW_ICON: &str = r#"ObjC.import('AppKit');
+function run(argv) {
+  var px = parseInt(argv[2], 10);
+  var icon = $.NSWorkspace.sharedWorkspace.iconForFile($(argv[0]));
+  var canvas = $.NSImage.alloc.initWithSize($.NSMakeSize(px, px));
+  canvas.lockFocus;
+  icon.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, px, px), $.NSMakeRect(0, 0, 0, 0), 2, 1.0);
+  canvas.unlockFocus;
+  var rep = $.NSBitmapImageRep.imageRepWithData(canvas.TIFFRepresentation);
+  var png = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary);
+  png.writeToFileAtomically($(argv[1]), true);
+}"#;
+
+    pub fn bundle_icon(app: &Path) -> Option<Vec<u8>> {
+        png_from(|out| {
+            let mut c = Command::new("/usr/bin/osascript");
+            c.args(["-l", "JavaScript", "-e", DRAW_ICON])
+                .arg(app)
+                .arg(out)
+                .arg(super::ICON_PX.to_string());
+            c
+        })
     }
 }
 
@@ -681,6 +994,10 @@ mod platform {
     }
 
     pub fn convert_icns(_path: &Path) -> Option<Vec<u8>> {
+        None
+    }
+
+    pub fn bundle_icon(_app: &Path) -> Option<Vec<u8>> {
         None
     }
 }
@@ -698,7 +1015,9 @@ pub struct IconStore {
 }
 
 impl IconStore {
-    /// `dir` is the on-disk cache folder (created on first write).
+    /// `dir` is the on-disk cache folder (created on first write). Pass None
+    /// to keep icons in memory only (Roomy does when it runs elevated, so it
+    /// never writes or deletes through a user-writable folder).
     pub fn new(dir: Option<PathBuf>) -> Self {
         if let Some(d) = &dir {
             prune(d, MAX_CACHE_FILES);
@@ -771,94 +1090,182 @@ impl IconStore {
     fn read(&self, s: &Source) -> Option<Icon> {
         match s {
             Source::Image { path, .. } => {
-                let bytes = read_small(path, MAX_IMAGE_BYTES)?;
-                let mime = image_mime(&bytes)?;
+                let bytes = read_bounded(path, MAX_IMAGE_BYTES)?;
+                let mime = checked_image(&bytes)?;
                 Some(Icon { mime, bytes })
             }
-            Source::Resource { path, index } => self.extract_cached(path, *index),
+            Source::Resource { path, index } => {
+                self.extract_cached(path, *index, || extract(path, *index))
+            }
+            // Keyed by Info.plist, which changes whenever the app is updated.
+            Source::AppBundle { app } => self.extract_cached(
+                &app.join("Contents").join("Info.plist"),
+                BUNDLE_INDEX,
+                || {
+                    platform::bundle_icon(app)
+                        .filter(|b| checked_image(b) == Some("image/png"))
+                        .map(|bytes| Icon {
+                            mime: "image/png",
+                            bytes,
+                        })
+                },
+            ),
         }
+    }
+
+    /// The cache folder, only when it and its parent are real folders (not
+    /// links or junctions). Creates it if needed.
+    fn cache_dir(&self, create: bool) -> Option<&Path> {
+        let dir = self.dir.as_deref()?;
+        let parent = dir.parent()?;
+        if create && !parent.exists() {
+            std::fs::create_dir_all(parent).ok()?;
+        }
+        if !is_plain_dir(parent) {
+            return None;
+        }
+        if create && std::fs::symlink_metadata(dir).is_err() {
+            let _ = std::fs::create_dir(dir);
+        }
+        is_plain_dir(dir).then_some(dir)
     }
 
     /// Extract with the on-disk cache in front. A failed extraction is
     /// remembered too, so it isn't retried until the file changes.
-    fn extract_cached(&self, path: &Path, index: i32) -> Option<Icon> {
-        let md = std::fs::metadata(path).ok()?;
-        if !md.is_file() {
+    fn extract_cached(
+        &self,
+        path: &Path,
+        index: i32,
+        extract: impl FnOnce() -> Option<Icon>,
+    ) -> Option<Icon> {
+        let md = std::fs::symlink_metadata(path).ok()?;
+        if !md.is_file() || is_link(&md) {
             return None;
         }
-        let Some(dir) = &self.dir else {
-            return extract(path, index);
+        let Some(dir) = self.cache_dir(false) else {
+            let icon = extract();
+            if let Some(dir) = self.cache_dir(true) {
+                let id = cache_id(path, index, &md);
+                store_entry(dir, &id, icon.as_ref());
+            }
+            return icon;
         };
-        let mtime = md
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let id = blake3::hash(
-            format!(
-                "{CACHE_VERSION}|{}|{index}|{mtime}|{}|{ICON_PX}",
-                path.to_string_lossy(),
-                md.len()
-            )
-            .as_bytes(),
-        )
-        .to_hex()[..24]
-            .to_string();
+        let id = cache_id(path, index, &md);
         let png = dir.join(format!("{id}.png"));
-        let none = dir.join(format!("{id}.none"));
-        if let Ok(bytes) = std::fs::read(&png) {
-            if image_mime(&bytes) == Some("image/png") {
+        if let Some(bytes) = read_bounded(&png, MAX_IMAGE_BYTES) {
+            if checked_image(&bytes) == Some("image/png") {
                 return Some(Icon {
                     mime: "image/png",
                     bytes,
                 });
             }
         }
-        if none.exists() {
+        if is_plain_file(&dir.join(format!("{id}.none"))) {
             return None;
         }
-        let icon = extract(path, index);
-        if std::fs::create_dir_all(dir).is_ok() {
-            match &icon {
-                Some(i) => write_atomic(&png, &i.bytes),
-                None => write_atomic(&none, &[]),
-            }
+        let icon = extract();
+        if let Some(dir) = self.cache_dir(true) {
+            store_entry(dir, &id, icon.as_ref());
         }
         icon
     }
 }
 
-fn write_atomic(dest: &Path, bytes: &[u8]) {
-    let tmp = dest.with_extension(format!(
-        "tmp{}-{:?}",
+/// Cache file id: the source's path, icon index, size and modification time.
+fn cache_id(path: &Path, index: i32, md: &std::fs::Metadata) -> String {
+    let mtime = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    blake3::hash(
+        format!(
+            "{CACHE_VERSION}|{}|{index}|{mtime}|{}|{ICON_PX}",
+            path.to_string_lossy(),
+            md.len()
+        )
+        .as_bytes(),
+    )
+    .to_hex()[..24]
+        .to_string()
+}
+
+/// A process-unique random-looking suffix for temporary files.
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seed = format!(
+        "{}|{:?}|{nanos}|{}",
         std::process::id(),
-        std::thread::current().id()
-    ));
-    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, dest).is_err() {
+        std::thread::current().id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    );
+    blake3::hash(seed.as_bytes()).to_hex()[..16].to_string()
+}
+
+/// Names Roomy itself writes to the cache folder: `<24 hex>.png`,
+/// `<24 hex>.none` and `<24 hex>.tmp-<16 hex>`.
+pub fn is_cache_entry(name: &str) -> bool {
+    let hex = |s: &str, n: usize| {
+        s.len() == n
+            && s.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    };
+    let Some((id, rest)) = name.split_once('.') else {
+        return false;
+    };
+    hex(id, 24)
+        && (rest == "png"
+            || rest == "none"
+            || rest
+                .strip_prefix("tmp-")
+                .map(|t| hex(t, 16))
+                .unwrap_or(false))
+}
+
+/// Write a cache entry: an exclusive new temporary file, then a rename.
+fn store_entry(dir: &Path, id: &str, icon: Option<&Icon>) {
+    use std::io::Write;
+    let (dest, bytes): (PathBuf, &[u8]) = match icon {
+        Some(i) => (dir.join(format!("{id}.png")), &i.bytes),
+        None => (dir.join(format!("{id}.none")), &[]),
+    };
+    let tmp = dir.join(format!("{id}.tmp-{}", unique_suffix()));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(bytes));
+    if written.is_err() || std::fs::rename(&tmp, &dest).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
 }
 
-/// Keep the cache folder bounded: clear Roomy's own cache files when there
-/// are too many.
+/// Keep the cache folder bounded. Only Roomy's own entries are counted or
+/// removed, and nothing happens if the folder is a link or junction.
 fn prune(dir: &Path, max: usize) {
+    if !is_plain_dir(dir) || !dir.parent().map(is_plain_dir).unwrap_or(false) {
+        return;
+    }
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
-    let files: Vec<PathBuf> = rd
+    let ours: Vec<PathBuf> = rd
         .flatten()
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter(|e| is_cache_entry(&e.file_name().to_string_lossy()))
         .map(|e| e.path())
         .collect();
-    if files.len() <= max {
+    if ours.len() <= max {
         return;
     }
-    for f in files {
-        let ext = ext_lower(&f);
-        if ext == "png" || ext == "none" || ext.starts_with("tmp") {
-            let _ = std::fs::remove_file(f);
-        }
+    for f in ours {
+        let _ = std::fs::remove_file(f);
     }
 }
 
@@ -1163,21 +1570,342 @@ mod tests {
         }];
         assert_eq!(store.load(&hints), None);
         let files: Vec<_> = std::fs::read_dir(&cache).unwrap().flatten().collect();
-        assert_eq!(files.len(), 1);
+        assert_eq!(files.len(), 1, "no temporary files left behind");
         assert!(files[0].path().extension().unwrap() == "none");
+        assert!(is_cache_entry(&files[0].file_name().to_string_lossy()));
+    }
+
+    fn own_entry(i: usize, ext: &str) -> String {
+        format!("{:024x}.{ext}", i)
     }
 
     #[test]
-    fn prune_clears_an_oversized_cache() {
+    fn prune_only_touches_roomys_own_entries() {
         let tmp = tempfile::tempdir().unwrap();
-        for i in 0..5 {
-            std::fs::write(tmp.path().join(format!("{i}.png")), b"x").unwrap();
+        let dir = tmp.path().join("icons");
+        std::fs::create_dir(&dir).unwrap();
+        for i in 0..4 {
+            std::fs::write(dir.join(own_entry(i, "png")), b"x").unwrap();
         }
-        std::fs::write(tmp.path().join("keep.txt"), b"x").unwrap();
-        prune(tmp.path(), 10);
-        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 6);
-        prune(tmp.path(), 3);
-        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 1);
+        std::fs::write(dir.join(format!("{:024x}.tmp-{:016x}", 9, 1)), b"x").unwrap();
+        // Unrelated files, even with the same extensions, are never removed.
+        for n in [
+            "photo.png",
+            "notes.none",
+            "x.tmp1",
+            "keep.txt",
+            "ABCDEF000000000000000000.png",
+        ] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        prune(&dir, 10);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 10);
+        prune(&dir, 3);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "ABCDEF000000000000000000.png",
+                "keep.txt",
+                "notes.none",
+                "photo.png",
+                "x.tmp1"
+            ]
+        );
+    }
+
+    #[test]
+    fn cache_entry_names() {
+        assert!(is_cache_entry(&own_entry(1, "png")));
+        assert!(is_cache_entry(&own_entry(1, "none")));
+        assert!(is_cache_entry(&format!("{:024x}.tmp-{:016x}", 1, 2)));
+        assert!(!is_cache_entry("photo.png"));
+        assert!(!is_cache_entry(&format!("{:023x}.png", 1)));
+        assert!(!is_cache_entry(&format!("{:024x}.png.txt", 1)));
+        assert!(!is_cache_entry(&format!("{:024x}.tmp-xyz", 1)));
+    }
+
+    /// A cache folder that is a link or junction is never pruned, read or
+    /// written through.
+    #[test]
+    fn linked_cache_folders_are_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("elsewhere");
+        std::fs::create_dir(&target).unwrap();
+        for i in 0..3 {
+            std::fs::write(target.join(own_entry(i, "png")), b"x").unwrap();
+        }
+        let link = tmp.path().join("icons");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let ok = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&target)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                return; // junctions unavailable here
+            }
+        }
+        prune(&link, 0);
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 3);
+        let store = IconStore::new(Some(link.clone()));
+        assert!(store.cache_dir(true).is_none());
+        let exe = tmp.path().join("NotAnIcon.exe");
+        std::fs::write(&exe, b"no icon").unwrap();
+        assert_eq!(
+            store.load(&[IconHint::File {
+                path: exe,
+                index: 0
+            }]),
+            None
+        );
+        assert_eq!(
+            std::fs::read_dir(&target).unwrap().count(),
+            3,
+            "nothing written"
+        );
+    }
+
+    #[test]
+    fn reads_are_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("big.png");
+        std::fs::write(&f, vec![0u8; 2000]).unwrap();
+        assert_eq!(read_bounded(&f, 1000), None);
+        assert_eq!(read_bounded(&f, 2000).map(|b| b.len()), Some(2000));
+        assert_eq!(read_bounded(tmp.path(), 2000), None, "folders aren't files");
+        #[cfg(unix)]
+        {
+            let l = tmp.path().join("link.png");
+            std::os::unix::fs::symlink(&f, &l).unwrap();
+            assert_eq!(read_bounded(&l, 4000), None, "links aren't followed");
+        }
+    }
+
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut v = PNG_1PX[..16].to_vec();
+        v.extend_from_slice(&w.to_be_bytes());
+        v.extend_from_slice(&h.to_be_bytes());
+        v.extend_from_slice(&PNG_1PX[24..]);
+        v
+    }
+
+    #[test]
+    fn decoded_dimensions_are_bounded() {
+        assert_eq!(image_size(PNG_1PX), Some((1, 1)));
+        assert_eq!(checked_image(PNG_1PX), Some("image/png"));
+        assert_eq!(checked_image(&png_header(64, 64)), Some("image/png"));
+        assert_eq!(checked_image(&png_header(5000, 64)), None);
+        assert_eq!(checked_image(&png_header(0, 64)), None);
+        // JPEG: SOI, an APP0 segment, then SOF0 with height 32 and width 48.
+        let jpeg = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00,
+            0x20, 0x00, 0x30, 0x01, 0x01, 0x11, 0x00,
+        ];
+        assert_eq!(image_size(&jpeg), Some((48, 32)));
+        assert_eq!(checked_image(&jpeg), Some("image/jpeg"));
+        let mut huge = jpeg;
+        huge[13] = 0x40; // height 0x4020
+        assert_eq!(checked_image(&huge), None);
+        assert_eq!(checked_image(&[0xFF, 0xD8, 0xFF]), None, "truncated");
+        assert_eq!(checked_image(b"not an image"), None);
+    }
+
+    #[test]
+    fn malformed_logo_qualifiers_are_skipped() {
+        let files = names(&[
+            "Logo.targetsize-99999999999999999999999_altform-unplated.png",
+            "Logo.targetsize-70000.png",
+            "Logo.scale-4294967296.png",
+            "Logo.scale-200.png",
+        ]);
+        assert_eq!(
+            pick_logo_variant("Logo", "png", &files).as_deref(),
+            Some("Logo.scale-200.png")
+        );
+    }
+
+    #[test]
+    fn only_plain_local_paths_are_used() {
+        #[cfg(windows)]
+        {
+            assert!(is_local_path(Path::new(r"C:\Program Files\App\app.exe")));
+            assert!(is_local_path(Path::new("D:/Games/x.ico")));
+            for p in [
+                r"\\server\share\app.exe",
+                r"\\?\C:\app.exe",
+                r"\\.\pipe\x",
+                r"C:app.exe",
+                r"\app.exe",
+                r"C:\a\..\b.exe",
+                r"relative\app.exe",
+            ] {
+                assert!(!is_local_path(Path::new(p)), "{p}");
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            assert!(is_local_path(Path::new("/Applications/App.app")));
+            for p in ["//server/share/x", "relative/x", "/a/../b"] {
+                assert!(!is_local_path(Path::new(p)), "{p}");
+            }
+        }
+        assert_eq!(
+            plain_relative(r"Assets\Logo.png"),
+            Some(PathBuf::from("Assets").join("Logo.png"))
+        );
+        for s in [
+            r"..\x.png",
+            r"C:\x.png",
+            "C:x.png",
+            "/x.png",
+            "a/../b.png",
+            "./a.png",
+            "",
+        ] {
+            assert_eq!(plain_relative(s), None, "{s}");
+        }
+        // Hints pointing anywhere else resolve to nothing.
+        let rel = PathBuf::from("relative").join("x.ico");
+        assert!(resolve(&IconHint::File {
+            path: rel.clone(),
+            index: 0
+        })
+        .is_empty());
+        assert!(resolve(&IconHint::ExeIn { dir: rel.clone() }).is_empty());
+        assert!(resolve(&IconHint::Package { root: rel }).is_empty());
+    }
+
+    #[test]
+    fn resolves_gdk_game_logo_from_microsoft_game_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = tmp
+            .path()
+            .join("XboxGames")
+            .join("Some Game")
+            .join("Content");
+        std::fs::create_dir_all(&content).unwrap();
+        std::fs::write(
+            content.join("MicrosoftGame.config"),
+            r#"<?xml version="1.0"?><Game configVersion="1"><Identity Name="X"/>
+            <ShellVisuals DefaultDisplayName="Some Game" Square150x150Logo="GraphicsLogo.png"
+              Square44x44Logo="SmallLogo.png" SplashScreenImage="Splash.png"/></Game>"#,
+        )
+        .unwrap();
+        std::fs::write(content.join("SmallLogo.png"), PNG_1PX).unwrap();
+        std::fs::write(content.join("GraphicsLogo.png"), PNG_1PX).unwrap();
+        assert_eq!(
+            resolve(&IconHint::Package {
+                root: content.clone()
+            }),
+            vec![Source::Image {
+                path: content.join("SmallLogo.png"),
+                mime: "image/png"
+            }]
+        );
+        // Without the small logo the next declared visual is used.
+        std::fs::remove_file(content.join("SmallLogo.png")).unwrap();
+        assert_eq!(
+            resolve(&IconHint::Package {
+                root: content.clone()
+            }),
+            vec![Source::Image {
+                path: content.join("GraphicsLogo.png"),
+                mime: "image/png"
+            }]
+        );
+        // Escaping the game folder is refused.
+        std::fs::write(
+            content.join("MicrosoftGame.config"),
+            r#"<Game><ShellVisuals Square44x44Logo="..\..\evil.png"/></Game>"#,
+        )
+        .unwrap();
+        assert!(resolve(&IconHint::Package { root: content }).is_empty());
+    }
+
+    #[test]
+    fn bundles_never_use_unrelated_document_icons() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("Some.app");
+        let res = app.join("Contents").join("Resources");
+        std::fs::create_dir_all(&res).unwrap();
+        std::fs::write(res.join("Document.icns"), b"icns").unwrap();
+        let files = |v: Vec<Source>| -> Vec<Source> {
+            v.into_iter()
+                .filter(|s| !matches!(s, Source::AppBundle { .. }))
+                .collect()
+        };
+        let hint = IconHint::Bundle { app: app.clone() };
+        assert!(files(resolve(&hint)).is_empty(), "no arbitrary .icns");
+        std::fs::write(res.join("AppIcon.icns"), b"icns").unwrap();
+        assert_eq!(
+            files(resolve(&hint)),
+            vec![Source::Resource {
+                path: res.join("AppIcon.icns"),
+                index: 0
+            }]
+        );
+        // On macOS the system-drawn icon (Assets.car aware) comes first.
+        assert_eq!(
+            matches!(resolve(&hint).first(), Some(Source::AppBundle { .. })),
+            cfg!(target_os = "macos")
+        );
+    }
+
+    #[test]
+    fn prefers_launcher_icon_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gog = tmp.path().join("GOG Games").join("Some Game");
+        std::fs::create_dir_all(&gog).unwrap();
+        for n in [
+            "unins000.ico",
+            "support.ico",
+            "goggame-1207658924.ico",
+            "game.exe",
+        ] {
+            std::fs::write(gog.join(n), b"x").unwrap();
+        }
+        assert_eq!(
+            resolve(&IconHint::IcoIn { dir: gog.clone() }),
+            vec![
+                Source::Resource {
+                    path: gog.join("goggame-1207658924.ico"),
+                    index: 0
+                },
+                Source::Resource {
+                    path: gog.join("support.ico"),
+                    index: 0
+                },
+            ]
+        );
+        let egstore = tmp.path().join("Epic").join("Game").join(".egstore");
+        std::fs::create_dir_all(&egstore).unwrap();
+        std::fs::write(egstore.join("Game.ico"), b"x").unwrap();
+        std::fs::write(egstore.join("ABC.manifest"), b"x").unwrap();
+        assert_eq!(
+            resolve(&IconHint::IcoIn {
+                dir: egstore.clone()
+            }),
+            vec![Source::Resource {
+                path: egstore.join("Game.ico"),
+                index: 0
+            }]
+        );
+        assert!(resolve(&IconHint::IcoIn {
+            dir: tmp.path().join("missing")
+        })
+        .is_empty());
     }
 
     #[cfg(windows)]

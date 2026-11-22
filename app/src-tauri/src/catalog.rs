@@ -65,6 +65,9 @@ pub enum IconHint {
     File { path: PathBuf, index: i32 },
     /// The app's main executable somewhere inside this folder.
     ExeIn { dir: PathBuf },
+    /// Icon files a launcher keeps at the top of an install folder (GOG's
+    /// `goggame-<id>.ico`, `.ico` files of Epic installs and `.egstore`).
+    IcoIn { dir: PathBuf },
     /// An MSIX/Appx package folder: the logo named in its AppxManifest.xml.
     Package { root: PathBuf },
     /// Steam's local library art (`appcache/librarycache`) for an app id.
@@ -88,7 +91,7 @@ impl IconHint {
                     0
                 }
             }
-            IconHint::Package { .. } | IconHint::Bundle { .. } => 0,
+            IconHint::Package { .. } | IconHint::Bundle { .. } | IconHint::IcoIn { .. } => 0,
             IconHint::Steam { .. } => 1,
             IconHint::ExeIn { .. } => 2,
         }
@@ -103,8 +106,10 @@ pub fn tidy_icons(icons: &mut Vec<IconHint>) {
 }
 
 /// Parse a Windows `DisplayIcon`-style value: `"C:\x\app.exe",0`,
-/// `C:\x\app.ico`, `C:/x/icon.ico, -101`. Generic system hosts
-/// (msiexec, rundll32, explorer) and folders are ignored.
+/// `C:\x\app.ico`, `C:/x/icon.ico, -101`. Only drive-absolute local paths
+/// are accepted (no UNC, device, drive-relative or rooted-only paths, no
+/// `.`/`..` and no alternate streams). Generic system hosts (msiexec,
+/// rundll32, explorer) and folders are ignored.
 pub fn icon_spec(s: &str) -> Option<IconHint> {
     let s = s.trim();
     let (path, rest) = if let Some(r) = s.strip_prefix('"') {
@@ -122,8 +127,16 @@ pub fn icon_spec(s: &str) -> Option<IconHint> {
         .parse::<i32>()
         .unwrap_or(0);
     let path_str = path.trim();
-    let drive = path_str.as_bytes().get(1) == Some(&b':');
-    if !(drive || path_str.starts_with(['/', '\\'])) {
+    let b = path_str.as_bytes();
+    let drive_absolute =
+        b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
+    if !drive_absolute || path_str[2..].contains(':') {
+        return None;
+    }
+    if path_str[3..]
+        .split(['/', '\\'])
+        .any(|c| c == "." || c == "..")
+    {
         return None;
     }
     let path = PathBuf::from(path_str);
@@ -432,10 +445,18 @@ pub fn epic_installs(program_data: &Path) -> Vec<AppRecord> {
             }
             let mut r = AppRecord::new(name, AppKind::Game, "Epic Games");
             r.install_dirs.push(PathBuf::from(loc));
+            // Launcher icon files first, then the executable the manifest
+            // names (only a plain path inside the install folder).
+            r.icons.push(IconHint::IcoIn {
+                dir: PathBuf::from(loc),
+            });
+            r.icons.push(IconHint::IcoIn {
+                dir: Path::new(loc).join(".egstore"),
+            });
             let exe = v["LaunchExecutable"].as_str().unwrap_or_default();
-            if !exe.is_empty() && !exe.contains("..") {
+            if let Some(rel) = crate::icons::plain_relative(exe) {
                 r.icons.push(IconHint::File {
-                    path: Path::new(loc).join(exe),
+                    path: Path::new(loc).join(rel),
                     index: 0,
                 });
             }
@@ -952,6 +973,9 @@ mod win {
                     continue;
                 };
                 let mut r = AppRecord::new(name, AppKind::Game, "GOG");
+                r.icons.push(IconHint::IcoIn {
+                    dir: PathBuf::from(&path),
+                });
                 if let Some(h) = e.string("exe").as_deref().and_then(icon_spec) {
                     r.icons.push(h);
                 }
@@ -1155,7 +1179,24 @@ mod tests {
                 0
             ))
         );
+        // Doubled separators are harmless (Windows collapses them).
+        let doubled = r"C:\Program Files (x86)\Lenovo\VantageService\\5.1\Uninstall.exe";
+        assert_eq!(f(doubled), Some((PathBuf::from(doubled), 0)));
         assert_eq!(f(r"C:\Windows\System32\msiexec.exe,1"), None);
+        // Only drive-absolute local paths.
+        for bad in [
+            r"\\server\share\app.exe",
+            r"\\?\C:\app.exe",
+            r"\\.\C:\app.exe",
+            r"C:app.exe",
+            r"\app.exe",
+            "/usr/bin/app.png",
+            r"C:\a\..\b.exe",
+            r"C:\a\.\b.exe",
+            r"C:\a\b.exe:stream",
+        ] {
+            assert_eq!(f(bad), None, "{bad}");
+        }
         assert_eq!(f(r"C:\Program Files\qpdf 12.3.2\"), None);
         assert_eq!(f("app.exe"), None);
         assert_eq!(f(""), None);
@@ -1197,6 +1238,61 @@ mod tests {
         ];
         tidy_icons(&mut v);
         assert!(matches!(v[0], IconHint::ExeIn { .. }));
+    }
+
+    #[test]
+    fn epic_manifests_offer_launcher_icons_then_the_named_exe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("ProgramData");
+        let manifests = pd.join("Epic/EpicGamesLauncher/Data/Manifests");
+        std::fs::create_dir_all(&manifests).unwrap();
+        let loc = tmp.path().join("Epic Games").join("SomeGame");
+        let item = |exe: &str| {
+            serde_json::json!({
+                "DisplayName": "Some Game",
+                "InstallLocation": loc.to_string_lossy(),
+                "LaunchExecutable": exe,
+            })
+            .to_string()
+        };
+        std::fs::write(
+            manifests.join("A.item"),
+            item("Binaries/Win64/SomeGame.exe"),
+        )
+        .unwrap();
+        let games = epic_installs(&pd);
+        assert_eq!(games.len(), 1);
+        assert_eq!(
+            games[0].icons,
+            vec![
+                IconHint::IcoIn { dir: loc.clone() },
+                IconHint::IcoIn {
+                    dir: loc.join(".egstore")
+                },
+                IconHint::File {
+                    path: loc.join("Binaries").join("Win64").join("SomeGame.exe"),
+                    index: 0
+                },
+                IconHint::ExeIn { dir: loc.clone() },
+            ]
+        );
+        // An absolute or escaping LaunchExecutable is never joined.
+        for exe in [
+            r"C:\Windows\notepad.exe",
+            "/etc/passwd",
+            "../../x.exe",
+            r"\\host\x.exe",
+        ] {
+            std::fs::write(manifests.join("A.item"), item(exe)).unwrap();
+            let games = epic_installs(&pd);
+            assert!(
+                !games[0]
+                    .icons
+                    .iter()
+                    .any(|h| matches!(h, IconHint::File { .. })),
+                "{exe}"
+            );
+        }
     }
 
     #[test]

@@ -1276,12 +1276,17 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(state)
         .setup(|app| {
-            // Extracted app icons are cached in Roomy's own data folder.
-            let dir = app
-                .path()
-                .app_local_data_dir()
-                .ok()
-                .map(|d| d.join("icons"));
+            // Extracted app icons are cached in Roomy's own data folder. When
+            // elevated, Roomy keeps them in memory only: it never writes to or
+            // cleans a folder the normal user could redirect.
+            let dir = if system::is_elevated() {
+                None
+            } else {
+                app.path()
+                    .app_local_data_dir()
+                    .ok()
+                    .map(|d| d.join("icons"))
+            };
             app.manage(icons::IconStore::new(dir));
             Ok(())
         })
