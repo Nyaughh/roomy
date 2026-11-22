@@ -13,7 +13,10 @@ name: Release
 # latest.json, which the app reads from
 #   https://github.com/Nyaughh/roomy/releases/latest/download/latest.json
 # The release stays a draft until every platform and latest.json are
-# uploaded, so installed apps never see a half-published update.
+# uploaded, so installed apps never see a half-published update. Re-running
+# the workflow is only allowed while the release is still a draft: once it's
+# published its assets and latest.json are never replaced (tag a new
+# version instead).
 on:
   push:
     tags: ["v*"]
@@ -40,7 +43,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]; then
+              echo "::error::Release $TAG is already published. Its assets and latest.json are live; tag a new version instead of re-running."
+              exit 1
+            fi
+            echo "Retrying the draft release $TAG."
+          else
             gh release create "$TAG" --draft --title "Roomy ${TAG#v}" --notes "Roomy ${TAG#v}. Make room.
 
           **Windows:** download \`Roomy-setup-x64.exe\` (or \`Roomy-x64.msi\`).
@@ -111,11 +120,17 @@ jobs:
             cp "$b/macos/Roomy.app.tar.gz.sig" out/Roomy-macos.app.tar.gz.sig
           fi
           ls -l out
-      - name: Upload to the release
+      - name: Upload to the release (drafts only)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" out/* --clobber
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "::error::Release $TAG is already published; refusing to replace its assets."
+            exit 1
+          fi
+          gh release upload "$TAG" out/* --clobber
 
   publish:
     needs: build
@@ -128,6 +143,10 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "::error::Release $TAG is already published; refusing to replace latest.json."
+            exit 1
+          fi
           mkdir sigs && cd sigs
           gh release download "$TAG" --repo "$REPO" --pattern '*.sig'
           base="https://github.com/$REPO/releases/download/$TAG"
