@@ -96,18 +96,58 @@ fn is_link(md: &std::fs::Metadata) -> bool {
     false
 }
 
-/// A regular file that isn't a link.
-fn is_plain_file(p: &Path) -> bool {
-    std::fs::symlink_metadata(p)
-        .map(|m| m.is_file() && !is_link(&m))
-        .unwrap_or(false)
+/// macOS's documented top-level aliases (`/tmp`, `/var`, `/etc` →
+/// `/private/...`) are the only links accepted on a path.
+fn is_os_alias(p: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if p.parent() == Some(Path::new("/")) {
+            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                if matches!(name, "tmp" | "var" | "etc") {
+                    if let Ok(t) = std::fs::read_link(p) {
+                        return t == Path::new("private").join(name)
+                            || t == Path::new("/private").join(name);
+                    }
+                }
+            }
+        }
+    }
+    let _ = p;
+    false
 }
 
-/// A real directory that isn't a link or junction.
+/// Metadata of `p` when every component from the root to `p` itself exists
+/// and none is a symlink, junction or other reparse point (apart from the
+/// macOS OS aliases). A redirected ancestor could otherwise send a
+/// local-looking path to another volume or a network share.
+fn plain_metadata(p: &Path) -> Option<std::fs::Metadata> {
+    use std::path::Component;
+    let mut cur = PathBuf::new();
+    let mut last = None;
+    for c in p.components() {
+        cur.push(c);
+        match c {
+            Component::Prefix(_) | Component::RootDir => continue,
+            Component::Normal(_) => {}
+            _ => return None,
+        }
+        let md = std::fs::symlink_metadata(&cur).ok()?;
+        if is_link(&md) && !is_os_alias(&cur) {
+            return None;
+        }
+        last = Some(md);
+    }
+    last
+}
+
+/// A regular file reached without passing through any link.
+fn is_plain_file(p: &Path) -> bool {
+    plain_metadata(p).map(|m| m.is_file()).unwrap_or(false)
+}
+
+/// A real directory reached without passing through any link or junction.
 fn is_plain_dir(p: &Path) -> bool {
-    std::fs::symlink_metadata(p)
-        .map(|m| m.is_dir() && !is_link(&m))
-        .unwrap_or(false)
+    plain_metadata(p).map(|m| m.is_dir()).unwrap_or(false)
 }
 
 /// Read at most `max` bytes of a regular, non-link file. The size is checked
@@ -603,22 +643,28 @@ fn is_sha1_jpg(name: &str) -> bool {
 /// Steam keeps each game's small icon in `librarycache/<appid>/<sha1>.jpg`
 /// (older clients: `librarycache/<appid>_icon.jpg`).
 fn steam_icon(cache: &Path, appid: &str) -> Option<Source> {
+    /// Steam's per-game folder holds a handful of files; look at no more.
+    const MAX_ENTRIES: usize = 256;
     if appid.is_empty() || !appid.chars().all(|c| c.is_ascii_digit()) || !is_plain_dir(cache) {
         return None;
     }
-    if let Ok(rd) = std::fs::read_dir(cache.join(appid)) {
-        let mut icons: Vec<PathBuf> = rd
-            .flatten()
-            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .filter(|e| is_sha1_jpg(&e.file_name().to_string_lossy()))
-            .map(|e| e.path())
-            .collect();
-        icons.sort();
-        if let Some(p) = icons.into_iter().next() {
-            return Some(Source::Image {
-                path: p,
-                mime: "image/jpeg",
-            });
+    let dir = cache.join(appid);
+    if is_plain_dir(&dir) {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            // The first SHA-named JPEG by name among a bounded number of entries.
+            let icon = rd
+                .take(MAX_ENTRIES)
+                .flatten()
+                .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| is_sha1_jpg(n))
+                .min();
+            if let Some(name) = icon {
+                return Some(Source::Image {
+                    path: dir.join(name),
+                    mime: "image/jpeg",
+                });
+            }
         }
     }
     let old = cache.join(format!("{appid}_icon.jpg"));
@@ -1138,10 +1184,7 @@ impl IconStore {
         index: i32,
         extract: impl FnOnce() -> Option<Icon>,
     ) -> Option<Icon> {
-        let md = std::fs::symlink_metadata(path).ok()?;
-        if !md.is_file() || is_link(&md) {
-            return None;
-        }
+        let md = plain_metadata(path).filter(|m| m.is_file())?;
         let Some(dir) = self.cache_dir(false) else {
             let icon = extract();
             if let Some(dir) = self.cache_dir(true) {
@@ -1674,6 +1717,135 @@ mod tests {
             std::fs::read_dir(&target).unwrap().count(),
             3,
             "nothing written"
+        );
+    }
+
+    /// Make `link` point at `target` (a symlink on unix, a junction on
+    /// Windows). Returns false where that isn't possible.
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+    }
+
+    #[test]
+    fn redirected_ancestors_are_never_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("App").join("Assets")).unwrap();
+        std::fs::write(real.join("App").join("icon.png"), PNG_1PX).unwrap();
+        std::fs::write(real.join("App").join("Assets").join("Logo.png"), PNG_1PX).unwrap();
+        std::fs::write(
+            real.join("App").join("AppxManifest.xml"),
+            r#"<Package><Properties><Logo>Assets\Logo.png</Logo></Properties></Package>"#,
+        )
+        .unwrap();
+        // The same files are reachable directly...
+        let direct = real.join("App").join("icon.png");
+        assert!(is_plain_file(&direct));
+        assert_eq!(
+            resolve(&IconHint::File {
+                path: direct,
+                index: 0
+            })
+            .len(),
+            1
+        );
+        // ...but not through a redirected ancestor folder.
+        let via = tmp.path().join("via");
+        if !link_dir(&real, &via) {
+            return;
+        }
+        let through = via.join("App").join("icon.png");
+        assert!(std::fs::metadata(&through).is_ok(), "the link works");
+        assert!(!is_plain_file(&through));
+        assert_eq!(read_bounded(&through, 4096), None);
+        assert!(resolve(&IconHint::File {
+            path: through,
+            index: 0
+        })
+        .is_empty());
+        assert!(resolve(&IconHint::Package {
+            root: via.join("App")
+        })
+        .is_empty());
+        assert!(resolve(&IconHint::ExeIn {
+            dir: via.join("App")
+        })
+        .is_empty());
+        assert!(resolve(&IconHint::IcoIn {
+            dir: via.join("App")
+        })
+        .is_empty());
+        let store = IconStore::new(None);
+        let png = via.join("App").join("icon.png");
+        assert_eq!(
+            store.load(&[IconHint::File {
+                path: png,
+                index: 0
+            }]),
+            None
+        );
+    }
+
+    #[test]
+    fn steam_app_folders_behind_links_are_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("librarycache");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(
+            elsewhere.join("0123456789abcdef0123456789abcdef01234567.jpg"),
+            [0xFF, 0xD8, 0xFF],
+        )
+        .unwrap();
+        if !link_dir(&elsewhere, &cache.join("570")) {
+            return;
+        }
+        assert!(resolve(&IconHint::Steam {
+            cache: cache.clone(),
+            appid: "570".into()
+        })
+        .is_empty());
+    }
+
+    #[test]
+    fn steam_icon_search_is_bounded_and_deterministic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("librarycache");
+        let dir = cache.join("570");
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["header.jpg", "logo.png", "library_600x900.jpg"] {
+            std::fs::write(dir.join(n), [0xFF, 0xD8, 0xFF]).unwrap();
+        }
+        let b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg";
+        let a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg";
+        std::fs::write(dir.join(b), [0xFF, 0xD8, 0xFF]).unwrap();
+        std::fs::write(dir.join(a), [0xFF, 0xD8, 0xFF]).unwrap();
+        // A folder named like an icon is not a file.
+        std::fs::create_dir(dir.join("0000000000000000000000000000000000000000.jpg")).unwrap();
+        assert_eq!(
+            resolve(&IconHint::Steam {
+                cache: cache.clone(),
+                appid: "570".into()
+            }),
+            vec![Source::Image {
+                path: dir.join(a),
+                mime: "image/jpeg"
+            }]
         );
     }
 
